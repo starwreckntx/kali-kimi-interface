@@ -1,0 +1,10 @@
+# Kali Kimi Interface Requirements
+# Python 3.6+ required
+
+# Core dependencies (standard library only)
+# No external packages required for basic functionality
+
+# Optional dependencies for enhanced features
+# pytest>=6.0.0        # For running tests
+# colorama>=0.4.0      # For Windows color support
+# requests>=2.25.0     # For web-based features
