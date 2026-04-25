@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cove LAN Topology — PurpBox Network Map</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e17;
+    color: #e0e0e0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: linear-gradient(180deg, #0a0e17 0%, #0a0e17dd 80%, transparent);
+    padding: 16px 24px 28px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  #header h1 {
+    font-size: 18px; font-weight: 700;
+    background: linear-gradient(90deg, #a855f7, #6366f1, #06b6d4);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  #header .badge {
+    background: #1e293b; border: 1px solid #334155; border-radius: 6px;
+    padding: 4px 10px; font-size: 11px; color: #94a3b8;
+  }
+  #header .badge.live { border-color: #22c55e; color: #22c55e; }
+
+  #controls {
+    position: fixed; top: 60px; right: 16px; z-index: 100;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .ctrl-btn {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: #1e293b; border: 1px solid #334155; color: #94a3b8;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; transition: all 0.15s;
+  }
+  .ctrl-btn:hover { background: #334155; color: #e2e8f0; border-color: #6366f1; }
+
+  #canvas { width: 100%; height: 100vh; }
+
+  #detail-panel {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    background: linear-gradient(0deg, #0a0e17 0%, #0a0e17ee 70%, transparent);
+    padding: 40px 24px 20px;
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  #detail-panel.open { transform: translateY(0); }
+
+  #detail-content {
+    max-width: 900px; margin: 0 auto;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;
+  }
+  .detail-card {
+    background: #111827; border: 1px solid #1f2937; border-radius: 10px;
+    padding: 14px;
+  }
+  .detail-card h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #6366f1; margin-bottom: 10px;
+  }
+  .detail-card .row {
+    display: flex; justify-content: space-between; padding: 3px 0;
+    font-size: 12px; border-bottom: 1px solid #1f293722;
+  }
+  .detail-card .row:last-child { border-bottom: none; }
+  .detail-card .label { color: #64748b; }
+  .detail-card .value { color: #e2e8f0; font-weight: 500; }
+
+  #close-detail {
+    position: absolute; top: 12px; right: 16px;
+    background: none; border: none; color: #64748b; cursor: pointer;
+    font-size: 20px;
+  }
+  #close-detail:hover { color: #e2e8f0; }
+
+  .port-badge {
+    display: inline-block; background: #1e293b; border: 1px solid #334155;
+    border-radius: 4px; padding: 2px 6px; margin: 2px; font-size: 10px;
+  }
+  .port-badge.open { border-color: #22c55e; color: #22c55e; }
+  .port-badge.filtered { border-color: #f59e0b; color: #f59e0b; }
+
+  /* Legend */
+  #legend {
+    position: fixed; bottom: 20px; left: 16px; z-index: 100;
+    background: #111827; border: 1px solid #1f2937; border-radius: 10px;
+    padding: 12px 16px; font-size: 11px;
+  }
+  #legend h4 { color: #6366f1; margin-bottom: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>⬡ COVE LAN TOPOLOGY</h1>
+  <span class="badge live">● 7 LIVE HOSTS</span>
+  <span class="badge">192.168.1.0/24</span>
+  <span class="badge">Kali 2025.4 — PurpBox</span>
+  <span class="badge">Scanned: 2026-04-24 21:40</span>
+</div>
+
+<div id="controls">
+  <button class="ctrl-btn" onclick="zoomIn()" title="Zoom In">+</button>
+  <button class="ctrl-btn" onclick="zoomOut()" title="Zoom Out">−</button>
+  <button class="ctrl-btn" onclick="resetView()" title="Reset">⌂</button>
+  <button class="ctrl-btn" onclick="togglePhysics()" title="Toggle Physics">⚡</button>
+</div>
+
+<svg id="canvas"></svg>
+
+<div id="detail-panel">
+  <button id="close-detail" onclick="closeDetail()">✕</button>
+  <div id="detail-content"></div>
+</div>
+
+<div id="legend">
+  <h4>Device Types</h4>
+  <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div> Router/Gateway</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div> Server (PurpBox)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Mobile/Tablet</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> IoT/Thermostat</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#64748b"></div> Tailscale Mesh</div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════
+// COVE LAN TOPOLOGY DATA — 2026-04-24
+// ═══════════════════════════════════════════════
+
+const nodes = [
+  {
+    id: "gateway",
+    ip: "192.168.1.1",
+    hostname: "SBE1V1K.lan",
+    mac: "F4:52:46:7A:E1:8B",
+    vendor: "Askey Computer",
+    type: "router",
+    os: "Linux 4.19-5.15",
+    device_type: "ARRIS Gateway",
+    ports: [
+      { port: 53, state: "open", service: "DNS", version: "Cloudflare public DNS" },
+      { port: 80, state: "open", service: "HTTP", version: "lighttpd 1.4.59" },
+      { port: 443, state: "open", service: "HTTPS", version: "lighttpd 1.4.59 (SSL)" }
+    ],
+    radius: 45,
+    color: "#a855f7",
+    notes: "ISP gateway. SSL cert: askey.com (valid to 2030)."
+  },
+  {
+    id: "purpbox",
+    ip: "192.168.1.219",
+    hostname: "PurpBox.lan",
+    mac: "00:26:B9:0F:F9:89",
+    vendor: "Dell Inc.",
+    type: "server",
+    os: "Kali GNU/Linux 2025.4 (6.18.3)",
+    device_type: "Sovereign AI Node",
+    ports: [
+      { port: 22, state: "open", service: "SSH", version: "OpenSSH" },
+      { port: 8003, state: "open", service: "Kimi Bridge", version: "FastAPI" },
+      { port: 8004, state: "open", service: "IRP Meeting Room", version: "WebSocket" },
+      { port: 3001, state: "open", service: "DeviantArt Gallery", version: "Node.js" },
+      { port: 9100, state: "open", service: "Kimi Portal", version: "FastAPI" }
+    ],
+    tailscale: { ip: "100.99.98.31", status: "online" },
+    radius: 50,
+    color: "#06b6d4",
+    notes: "This node. Kermes agent. RecForge audio. 159 Kali tools."
+  },
+  {
+    id: "ipad",
+    ip: "192.168.1.92",
+    hostname: "iPad.lan",
+    mac: "F2:E8:02:73:10:A8",
+    vendor: "Apple",
+    type: "mobile",
+    os: "Apple iOS 14.0-15.6 (Darwin 20-22)",
+    device_type: "iPad",
+    ports: [
+      { port: 49152, state: "open", service: "AirPlay", version: "tcpwrapped" },
+      { port: 60550, state: "open", service: "Unknown", version: "" },
+      { port: 62078, state: "open", service: "Companion Link", version: "tcpwrapped" },
+      { port: 62506, state: "open", service: "Unknown", version: "" }
+    ],
+    radius: 30,
+    color: "#22c55e",
+    notes: "Apple iOS device. AirPlay + Companion Link active."
+  },
+  {
+    id: "iphone",
+    ip: "192.168.1.232",
+    hostname: "iPhone.lan",
+    mac: "6A:CF:95:66:E9:B2",
+    vendor: "Apple",
+    type: "mobile",
+    os: "Apple iOS (Darwin)",
+    device_type: "iPhone",
+    ports: [
+      { port: 51814, state: "open", service: "Unknown", version: "" },
+      { port: 51937, state: "filtered", service: "Unknown", version: "" },
+      { port: 55360, state: "open", service: "Unknown", version: "tcpwrapped" },
+      { port: 62078, state: "open", service: "Companion Link", version: "tcpwrapped" }
+    ],
+    radius: 28,
+    color: "#22c55e",
+    notes: "iPhone. Companion Link port matches iPad (62078)."
+  },
+  {
+    id: "thermostat",
+    ip: "192.168.1.70",
+    hostname: "Tstat-4B00B1.lan",
+    mac: "B8:2C:A0:4B:00:B1",
+    vendor: "Resideo",
+    type: "iot",
+    os: "Embedded (Resideo)",
+    device_type: "Smart Thermostat",
+    ports: [],
+    radius: 25,
+    color: "#f59e0b",
+    notes: "Resideo smart thermostat. All TCP ports closed. Cloud-communicating IoT."
+  },
+  {
+    id: "samsung",
+    ip: "192.168.1.27",
+    hostname: "Samsung.lan",
+    mac: "68:72:C3:7D:C7:6C",
+    vendor: "Samsung Electronics",
+    type: "mobile",
+    os: "Android",
+    device_type: "Samsung Phone/Tablet",
+    ports: [],
+    radius: 26,
+    color: "#22c55e",
+    notes: "Samsung device detected by nmap ping sweep."
+  },
+  {
+    id: "samsung2",
+    ip: "192.168.1.28",
+    hostname: "—",
+    mac: "3C:9C:0F:9C:AB:F8",
+    vendor: "Samsung Electronics",
+    type: "mobile",
+    os: "Android",
+    device_type: "Samsung Phone/Tablet",
+    ports: [],
+    radius: 24,
+    color: "#22c55e44",
+    notes: "STALE ARP entry. Device may have moved to different network."
+  },
+  {
+    id: "tailscale",
+    ip: "100.99.98.31",
+    hostname: "PurpBox (Tailscale)",
+    mac: "N/A",
+    vendor: "Tailscale",
+    type: "overlay",
+    os: "WireGuard + DERP",
+    device_type: "Mesh VPN Overlay",
+    ports: [],
+    radius: 20,
+    color: "#64748b",
+    notes: "Tailscale mesh. Reachable from any Tailscale peer. DERP relay."
+  }
+];
+
+const links = [
+  { source: "gateway", target: "purpbox", type: "ethernet", label: "eth0 1Gbps" },
+  { source: "gateway", target: "ipad", type: "wifi", label: "WiFi" },
+  { source: "gateway", target: "iphone", type: "wifi", label: "WiFi" },
+  { source: "gateway", target: "thermostat", type: "wifi", label: "WiFi 2.4GHz" },
+  { source: "gateway", target: "samsung", type: "wifi", label: "WiFi" },
+  { source: "gateway", target: "samsung2", type: "wifi", label: "WiFi (stale)" },
+  { source: "purpbox", target: "tailscale", type: "overlay", label: "WireGuard" },
+  { source: "ipad", target: "iphone", type: "direct", label: "Companion Link" }
+];
+
+// ═══════════════════════════════════════════════
+// D3 FORCE GRAPH
+// ═══════════════════════════════════════════════
+
+const svg = d3.select("#canvas");
+const width = window.innerWidth;
+const height = window.innerHeight;
+
+svg.attr("width", width).attr("height", height);
+
+// Defs for gradients and glow
+const defs = svg.append("defs");
+
+// Glow filter
+const filter = defs.append("filter").attr("id", "glow");
+filter.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "blur");
+filter.append("feMerge").selectAll("feMergeNode")
+  .data(["blur", "SourceGraphic"]).enter()
+  .append("feMergeNode").attr("in", d => d);
+
+// Gradient for links
+const linkGradient = defs.append("linearGradient").attr("id", "linkGrad");
+linkGradient.append("stop").attr("offset", "0%").attr("stop-color", "#6366f1").attr("stop-opacity", 0.6);
+linkGradient.append("stop").attr("offset", "100%").attr("stop-color", "#06b6d4").attr("stop-opacity", 0.6);
+
+const g = svg.append("g");
+
+// Zoom
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 5])
+  .on("zoom", (event) => g.attr("transform", event.transform));
+
+svg.call(zoom);
+
+// Simulation
+let physicsOn = true;
+const simulation = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id(d => d.id).distance(120))
+  .force("charge", d3.forceManyBody().strength(-400))
+  .force("center", d3.forceCenter(width / 2, height / 2))
+  .force("collision", d3.forceCollide().radius(d => d.radius + 15));
+
+// Links
+const linkGroup = g.append("g").attr("class", "links");
+const linkElements = linkGroup.selectAll("line")
+  .data(links).enter().append("line")
+  .attr("stroke", d => d.type === "overlay" ? "#64748b" : d.type === "direct" ? "#22c55e" : "url(#linkGrad)")
+  .attr("stroke-width", d => d.type === "ethernet" ? 3 : d.type === "overlay" ? 1.5 : 2)
+  .attr("stroke-dasharray", d => (d.type === "wifi" || d.type === "overlay") ? "6,4" : "none")
+  .attr("opacity", 0.6);
+
+// Link labels
+const linkLabels = linkGroup.selectAll("text")
+  .data(links).enter().append("text")
+  .text(d => d.label)
+  .attr("font-size", 9)
+  .attr("fill", "#475569")
+  .attr("text-anchor", "middle")
+  .attr("dy", -4);
+
+// Nodes
+const nodeGroup = g.append("g").attr("class", "nodes");
+const nodeElements = nodeGroup.selectAll("g")
+  .data(nodes).enter().append("g")
+  .attr("cursor", "pointer")
+  .call(d3.drag()
+    .on("start", dragStarted)
+    .on("drag", dragged)
+    .on("end", dragEnded))
+  .on("click", (event, d) => showDetail(d));
+
+// Node circles with pulse for active services
+nodeElements.append("circle")
+  .attr("r", d => d.radius)
+  .attr("fill", d => d.color + "22")
+  .attr("stroke", d => d.color)
+  .attr("stroke-width", 2)
+  .attr("filter", "url(#glow)");
+
+// Pulse ring for nodes with open ports
+nodeElements.filter(d => d.ports.length > 0)
+  .append("circle")
+  .attr("r", d => d.radius + 8)
+  .attr("fill", "none")
+  .attr("stroke", d => d.color)
+  .attr("stroke-width", 1)
+  .attr("opacity", 0.3)
+  .attr("class", "pulse");
+
+// Service count badges
+nodeElements.filter(d => d.ports.length > 0)
+  .append("circle")
+  .attr("cx", d => d.radius * 0.7)
+  .attr("cy", d => -d.radius * 0.7)
+  .attr("r", 10)
+  .attr("fill", "#0a0e17")
+  .attr("stroke", d => d.color)
+  .attr("stroke-width", 1.5);
+
+nodeElements.filter(d => d.ports.length > 0)
+  .append("text")
+  .attr("x", d => d.radius * 0.7)
+  .attr("y", d => -d.radius * 0.7 + 4)
+  .text(d => d.ports.length)
+  .attr("font-size", 9)
+  .attr("fill", d => d.color)
+  .attr("text-anchor", "middle")
+  .attr("font-weight", "bold");
+
+// Hostname labels
+nodeElements.append("text")
+  .text(d => d.hostname)
+  .attr("y", d => d.radius + 16)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 11)
+  .attr("fill", "#94a3b8")
+  .attr("font-weight", 500);
+
+// IP labels
+nodeElements.append("text")
+  .text(d => d.ip)
+  .attr("y", d => d.radius + 28)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 9)
+  .attr("fill", "#475569");
+
+// Device type icons (Unicode)
+nodeElements.append("text")
+  .text(d => {
+    if (d.type === "router") return "🌐";
+    if (d.type === "server") return "⬡";
+    if (d.type === "mobile") return "📱";
+    if (d.type === "iot") return "🌡️";
+    if (d.type === "overlay") return "🔒";
+    return "●";
+  })
+  .attr("y", 5)
+  .attr("text-anchor", "middle")
+  .attr("font-size", d => d.radius * 0.6);
+
+// Simulation tick
+simulation.on("tick", () => {
+  linkElements
+    .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+
+  linkLabels
+    .attr("x", d => (d.source.x + d.target.x) / 2)
+    .attr("y", d => (d.source.y + d.target.y) / 2);
+
+  nodeElements.attr("transform", d => `translate(${d.x},${d.y})`);
+});
+
+// Pulse animation
+function animatePulse() {
+  d3.selectAll(".pulse")
+    .transition()
+    .duration(2000)
+    .attr("r", function() { return +d3.select(this).attr("r") + 5; })
+    .attr("opacity", 0)
+    .transition()
+    .duration(0)
+    .attr("r", function(d) { return d.radius + 8; })
+    .attr("opacity", 0.3)
+    .on("end", animatePulse);
+}
+animatePulse();
+
+// ═══════════════════════════════════════════════
+// INTERACTIONS
+// ═══════════════════════════════════════════════
+
+function showDetail(d) {
+  const panel = document.getElementById("detail-panel");
+  const content = document.getElementById("detail-content");
+
+  const portsHtml = d.ports.length > 0
+    ? d.ports.map(p => `<span class="port-badge ${p.state}">${p.port}/${p.service}${p.version ? ' ('+p.version+')' : ''}</span>`).join(" ")
+    : '<span style="color:#64748b">No open TCP ports</span>';
+
+  const tsHtml = d.tailscale
+    ? `<div class="row"><span class="label">Tailscale</span><span class="value">${d.tailscale.ip} (${d.tailscale.status})</span></div>`
+    : "";
+
+  content.innerHTML = `
+    <div class="detail-card">
+      <h3>⬡ Identity</h3>
+      <div class="row"><span class="label">Hostname</span><span class="value">${d.hostname}</span></div>
+      <div class="row"><span class="label">IP Address</span><span class="value">${d.ip}</span></div>
+      <div class="row"><span class="label">MAC</span><span class="value">${d.mac}</span></div>
+      <div class="row"><span class="label">Vendor</span><span class="value">${d.vendor}</span></div>
+      <div class="row"><span class="label">Device</span><span class="value">${d.device_type}</span></div>
+      ${tsHtml}
+    </div>
+    <div class="detail-card">
+      <h3>🔌 Services (${d.ports.length})</h3>
+      <div style="line-height:2">${portsHtml}</div>
+    </div>
+    <div class="detail-card">
+      <h3>📋 Details</h3>
+      <div class="row"><span class="label">OS</span><span class="value">${d.os}</span></div>
+      <div class="row"><span class="label">Type</span><span class="value">${d.type}</span></div>
+      <div class="row"><span class="label">Notes</span><span class="value" style="font-size:10px">${d.notes}</span></div>
+    </div>
+  `;
+
+  panel.classList.add("open");
+
+  // Zoom to node
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(width/2 - d.x*1.5, height/2 - d.y*1.5).scale(1.5)
+  );
+}
+
+function closeDetail() {
+  document.getElementById("detail-panel").classList.remove("open");
+  resetView();
+}
+
+function zoomIn() {
+  svg.transition().duration(300).call(zoom.scaleBy, 1.4);
+}
+
+function zoomOut() {
+  svg.transition().duration(300).call(zoom.scaleBy, 0.7);
+}
+
+function resetView() {
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(0, 0).scale(1)
+  );
+}
+
+function togglePhysics() {
+  physicsOn = !physicsOn;
+  if (physicsOn) {
+    simulation.alpha(0.3).restart();
+  } else {
+    simulation.stop();
+  }
+}
+
+function dragStarted(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x; d.fy = d.y;
+}
+
+function dragged(event, d) {
+  d.fx = event.x; d.fy = event.y;
+}
+
+function dragEnded(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null; d.fy = null;
+}
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeDetail();
+  if (e.key === "+" || e.key === "=") zoomIn();
+  if (e.key === "-") zoomOut();
+  if (e.key === "0") resetView();
+});
+
+// Resize handler
+window.addEventListener("resize", () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  svg.attr("width", w).attr("height", h);
+  simulation.force("center", d3.forceCenter(w/2, h/2));
+  simulation.alpha(0.3).restart();
+});
+
+console.log("⬡ Cove LAN Topology loaded — " + nodes.length + " nodes, " + links.length + " links");
+</script>
+</body>
+</html>
