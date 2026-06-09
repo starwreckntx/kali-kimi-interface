@@ -17,7 +17,9 @@ Architecture:
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -33,8 +35,35 @@ from harness_integration import SecurityToolExecutor
 from kali_tools import SecurityToolResult, SecurityToolError
 
 
-KIMI_CLI = "/home/starwreck/.local/bin/kimi"
-WORK_DIR = "/home/starwreck/kali-kimi-interface"
+# Default working directory is the repository root (this file's directory), so the
+# orchestrator runs out-of-the-box for anyone who has cloned the repo.
+DEFAULT_WORK_DIR = Path(__file__).resolve().parent
+
+
+def resolve_kimi_cli(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate an executable Kimi CLI binary.
+
+    Resolution order (first executable match wins):
+      1. An explicit path (e.g. the --kimi-cli flag)
+      2. The KIMI_CLI environment variable
+      3. ``kimi`` discovered on PATH
+      4. ``~/.local/bin/kimi`` (the conventional pip --user install location)
+
+    Returns the resolved absolute path, or ``None`` if no executable was found.
+    """
+    candidates = [
+        explicit,
+        os.environ.get("KIMI_CLI"),
+        shutil.which("kimi"),
+        str(Path.home() / ".local" / "bin" / "kimi"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    return None
 
 
 @dataclass
@@ -125,25 +154,42 @@ class KaliKimiOrchestrator:
         }
     }
     
-    def __init__(self, verbose: bool = False):
+    def __init__(
+        self,
+        verbose: bool = False,
+        kimi_cli: Optional[str] = None,
+        work_dir: Optional[str] = None,
+    ):
         self.executor = SecurityToolExecutor()
         self.verbose = verbose
+        self.work_dir = str(Path(work_dir).expanduser().resolve()) if work_dir else str(DEFAULT_WORK_DIR)
+        self.kimi_cli = resolve_kimi_cli(kimi_cli)
         self.sessions: Dict[str, OrchestratorSession] = {}
-    
+
+    def require_kimi(self) -> str:
+        """Return the Kimi CLI path, raising a clear error if it is unavailable."""
+        if not self.kimi_cli:
+            raise SecurityToolError(
+                "Kimi CLI not found. Install it and ensure `kimi` is on your PATH, "
+                "set the KIMI_CLI environment variable to its full path, or pass "
+                "--kimi-cli /path/to/kimi."
+            )
+        return self.kimi_cli
+
     def _call_kimi(self, prompt: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Call Kimi CLI with a prompt, return parsed response."""
-        
-        cmd = [KIMI_CLI, "--print", "--quiet", "--prompt", prompt, "-w", WORK_DIR]
+
+        cmd = [self.require_kimi(), "--print", "--quiet", "--prompt", prompt, "-w", self.work_dir]
         if session_id:
             cmd.extend(["-r", session_id])
-        
+
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
-                cwd=WORK_DIR
+                cwd=self.work_dir
             )
             
             response = result.stdout.strip()
@@ -329,6 +375,9 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         Returns session results with all findings.
         """
         
+        # Fail fast with a clear message if the Kimi CLI is missing.
+        self.require_kimi()
+
         session_id = f"kki-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         session = OrchestratorSession(
             session_id=session_id,
@@ -344,6 +393,7 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         print(f"\n{'='*60}")
         print(f"KALI-KIMI ORCHESTRATOR — Session {session_id}")
         print(f"Target: {target} | Task: {task} | Depth: {depth}")
+        print(f"Kimi CLI: {self.kimi_cli} | Work dir: {self.work_dir}")
         print(f"{'='*60}\n")
         
         # Build initial prompt
@@ -424,9 +474,9 @@ Return your decision as JSON now."""
                 print(f"[!] Unknown action: {action}")
                 break
         
-        # Save session
-        output_file = f"/home/starwreck/kali-kimi-interface/results/{session_id}.json"
-        Path(output_file).parent.mkdir(exist_ok=True)
+        # Save session under the working directory's results/ folder
+        output_file = Path(self.work_dir) / "results" / f"{session_id}.json"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, 'w') as f:
             json.dump(session.to_dict(), f, indent=2)
         print(f"\n[📁] Session saved: {output_file}")
@@ -442,18 +492,28 @@ def main():
     parser.add_argument("--task", default="full recon", help="Task description")
     parser.add_argument("--depth", choices=["quick", "standard", "deep"], default="standard")
     parser.add_argument("--max-rounds", type=int, default=10, help="Max orchestration rounds")
+    parser.add_argument("--kimi-cli", help="Path to the Kimi CLI (overrides PATH / KIMI_CLI env var)")
+    parser.add_argument("--work-dir", help="Working directory for Kimi (default: repo root)")
     parser.add_argument("--verbose", "-v", action="store_true")
-    
+
     args = parser.parse_args()
-    
-    orchestrator = KaliKimiOrchestrator(verbose=args.verbose)
-    result = orchestrator.run_assessment(
-        target=args.target,
-        task=args.task,
-        depth=args.depth,
-        max_rounds=args.max_rounds
-    )
-    
+
+    try:
+        orchestrator = KaliKimiOrchestrator(
+            verbose=args.verbose,
+            kimi_cli=args.kimi_cli,
+            work_dir=args.work_dir,
+        )
+        result = orchestrator.run_assessment(
+            target=args.target,
+            task=args.task,
+            depth=args.depth,
+            max_rounds=args.max_rounds,
+        )
+    except SecurityToolError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        sys.exit(1)
+
     print("\n" + json.dumps(result, indent=2))
 
 

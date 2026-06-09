@@ -164,6 +164,33 @@ report = mapper.generate_network_map()
 mapper.save_map('network_map.json')
 ```
 
+### AI Orchestrator (Kimi)
+
+The orchestrator delegates an assessment to an external **Kimi** reasoning CLI, which
+picks tools, runs them through the safe execution layer, and analyzes the results in a
+loop.
+
+**Prerequisites:**
+
+- The Kimi CLI installed and runnable. The orchestrator locates it automatically, in this
+  order: the `--kimi-cli` flag → the `KIMI_CLI` environment variable → `kimi` on your
+  `PATH` → `~/.local/bin/kimi`.
+- The Kali tools you want it to use installed (nmap, sqlmap, gobuster, nikto, masscan,
+  tshark, …). Missing tools simply fail that step.
+
+```bash
+# Kimi auto-detected on PATH or via the KIMI_CLI env var
+python3 orchestrator.py --target 192.168.1.0/24 --task "full recon" --depth standard
+
+# Or point at a specific Kimi binary / working directory
+python3 orchestrator.py --target example.com --task "web vuln scan" \
+    --kimi-cli ~/.local/bin/kimi --work-dir .
+```
+
+Session results are written to `<work-dir>/results/<session-id>.json` (the work dir
+defaults to the repo root). If no Kimi binary is found, the orchestrator exits with a
+clear error explaining how to point it at one.
+
 ## 🧰 Tool Categories
 
 | Category | Tools | Description |

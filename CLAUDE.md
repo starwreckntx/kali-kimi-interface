@@ -101,7 +101,10 @@ python3 -m src.network_mapper --ethernet --scan-ports
 python3 -m src.network_mapper --wifi wlan0
 
 # Orchestrator (requires the external Kimi CLI + target)
+# Kimi is auto-located via PATH / the KIMI_CLI env var / ~/.local/bin/kimi;
+# override with --kimi-cli, and the work dir defaults to the repo root.
 python3 orchestrator.py --target 192.168.1.0/24 --task "full recon" --depth standard
+python3 orchestrator.py --target example.com --task "web scan" --kimi-cli /path/to/kimi
 ```
 
 ## Tests
@@ -160,10 +163,14 @@ python3 -m pytest tests/ -v
 
 ## Environment-specific notes
 
-- `orchestrator.py` hardcodes `KIMI_CLI = "/home/starwreck/.local/bin/kimi"` and
-  `WORK_DIR = "/home/starwreck/kali-kimi-interface"`. These are operator-specific paths;
-  the orchestrator won't run without that external CLI present. Don't assume they exist in
-  this container.
+- `orchestrator.py` depends on an **external Kimi reasoning CLI**. It is located at
+  runtime by `resolve_kimi_cli()` in this order: the `--kimi-cli` flag → the `KIMI_CLI`
+  environment variable → `kimi` on `PATH` → `~/.local/bin/kimi`. The working directory
+  defaults to the repo root (`--work-dir` to override), and session results are written to
+  `<work_dir>/results/`. If no Kimi binary is found the orchestrator fails fast with a
+  clear message and exit code 1 — it does **not** assume any operator-specific path. The
+  Kimi CLI still won't be present in a bare container, so the orchestrator can't actually
+  run an assessment here.
 - Many tools and wordlists (`/usr/share/wordlists/...`) only exist on a real Kali install.
   Logic should degrade gracefully (the registry already detects installed vs. missing).
 
