@@ -33,6 +33,10 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from harness_integration import SecurityToolExecutor
 from kali_tools import SecurityToolResult, SecurityToolError
+from governance.engine import GovernedExecutor, GovernedResult
+from governance.policy import PolicyEngine
+from governance.consent import ConsentGate
+from governance.audit import AuditLog
 
 
 # Default working directory is the repository root (this file's directory), so the
@@ -159,11 +163,30 @@ class KaliKimiOrchestrator:
         verbose: bool = False,
         kimi_cli: Optional[str] = None,
         work_dir: Optional[str] = None,
+        governed: bool = True,
+        executor: Any = None,
+        network_scope: Optional[List[str]] = None,
+        consent_prompt: Any = None,
+        consent_timeout: float = 30.0,
     ):
-        self.executor = SecurityToolExecutor()
         self.verbose = verbose
         self.work_dir = str(Path(work_dir).expanduser().resolve()) if work_dir else str(DEFAULT_WORK_DIR)
         self.kimi_cli = resolve_kimi_cli(kimi_cli)
+        # Route every tool call through the governance gate by default. Inject an executor
+        # (e.g. a stub) for test isolation; pass governed=False only to bypass for tests.
+        if executor is not None:
+            self.executor = executor
+        elif governed:
+            self.executor = GovernedExecutor(
+                executor=SecurityToolExecutor(),
+                policy=PolicyEngine(network_scope=network_scope),
+                consent=ConsentGate(prompt_fn=consent_prompt, timeout=consent_timeout),
+                audit=AuditLog(),
+            )
+        else:
+            self.executor = SecurityToolExecutor()
+        # Dispatch decisions key off the *actual* executor type, not just the flag.
+        self.governed = isinstance(self.executor, GovernedExecutor)
         self.sessions: Dict[str, OrchestratorSession] = {}
 
     def require_kimi(self) -> str:
@@ -295,29 +318,62 @@ OR when done:
 
 Start your assessment. Return your FIRST tool call as JSON now."""
 
+    # Non-harness wrappers, keyed by tool name. These run subprocess.run directly, so when
+    # governed they MUST pass through the consent gate (via authorize) before running.
+    _LOCAL_WRAPPERS = ("masscan_quick", "tshark_capture")
+
     def _execute_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool call through the KKI harness."""
-        
+        """Execute a tool call. When governed, every path — including the local
+        masscan/tshark wrappers — passes through GovernedExecutor's gate first."""
+
         tool_name = tool_call.get("tool", "")
         params = tool_call.get("params", {})
-        
+
         if self.verbose:
             print(f"[ORCHESTRATOR] Executing: {tool_name} with {json.dumps(params)}")
-        
-        # Handle masscan wrapper (not in harness natively)
+
+        if self.governed:
+            return self._governed_dispatch(tool_name, params)
+
+        # Ungoverned path (test isolation only) — original behavior.
         if tool_name == "masscan_quick":
             return self._run_masscan(params)
-        
-        # Handle tshark wrapper
         if tool_name == "tshark_capture":
             return self._run_tshark(params)
-        
-        # Use harness for standard tools
         try:
-            result = self.executor.execute(tool_name, params)
-            return result
+            return self.executor.execute(tool_name, params)
         except Exception as e:
             return {"error": str(e), "tool": tool_name, "success": False}
+
+    def _governed_dispatch(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a tool through the governance gate and normalize the GovernedResult to the
+        dict shape the assessment loop already expects."""
+        if tool_name in self._LOCAL_WRAPPERS:
+            # Not registered in the base executor: gate-only, then run the wrapper if cleared.
+            gr = self.executor.authorize(tool_name, params, permission="danger-full-access")
+            if not gr.allowed:
+                return self._deny_dict(tool_name, gr)
+            return self._run_masscan(params) if tool_name == "masscan_quick" else self._run_tshark(params)
+
+        gr = self.executor.execute(tool_name, params)
+        if gr.allowed:
+            result = dict(gr.result or {})
+            result.setdefault("tool", tool_name)
+            return result
+        return self._deny_dict(tool_name, gr)
+
+    @staticmethod
+    def _deny_dict(tool_name: str, gr: "GovernedResult") -> Dict[str, Any]:
+        # Shaped like a SecurityToolResult error so the existing loop error path catches it
+        # with no special-casing.
+        return {
+            "tool": tool_name,
+            "error": gr.denial_reason or "blocked by governance",
+            "success": False,
+            "returncode": -1,
+            "parsed_output": {},
+            "governance": gr.to_dict(),
+        }
     
     def _run_masscan(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Wrapper for masscan."""
@@ -379,6 +435,9 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         self.require_kimi()
 
         session_id = f"kki-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        if self.governed:
+            # Correlate the audit chain with this assessment session.
+            self.executor.audit.session_id = session_id
         session = OrchestratorSession(
             session_id=session_id,
             target=target,
@@ -480,7 +539,18 @@ Return your decision as JSON now."""
         with open(output_file, 'w') as f:
             json.dump(session.to_dict(), f, indent=2)
         print(f"\n[📁] Session saved: {output_file}")
-        
+
+        # Mnemosyne mirror: the signed audit chain + any boundary-consent pending actions.
+        if self.governed:
+            audit_dir = Path(self.work_dir) / "audit"
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            chain_file = audit_dir / f"{session_id}.chain"
+            self.executor.save_audit(str(chain_file))
+            boundary = self.executor.session_report()["boundary_consent"]
+            with open(audit_dir / f"{session_id}.pending", 'w') as f:
+                json.dump(boundary, f, indent=2)
+            print(f"[🔐] Audit chain saved: {chain_file}")
+
         return session.to_dict()
 
 
@@ -494,6 +564,10 @@ def main():
     parser.add_argument("--max-rounds", type=int, default=10, help="Max orchestration rounds")
     parser.add_argument("--kimi-cli", help="Path to the Kimi CLI (overrides PATH / KIMI_CLI env var)")
     parser.add_argument("--work-dir", help="Working directory for Kimi (default: repo root)")
+    parser.add_argument("--network-scope", action="append",
+                        help="Allowed target CIDR for the governance scope gate (repeatable)")
+    parser.add_argument("--ungoverned", action="store_true",
+                        help="DANGER: bypass the governance layer (no policy/consent/audit). Not recommended.")
     parser.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -503,6 +577,8 @@ def main():
             verbose=args.verbose,
             kimi_cli=args.kimi_cli,
             work_dir=args.work_dir,
+            governed=not args.ungoverned,
+            network_scope=args.network_scope,
         )
         result = orchestrator.run_assessment(
             target=args.target,

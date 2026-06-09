@@ -84,7 +84,7 @@ the audit chain.
 
 | Task | Status | Notes |
 |---|---|---|
-| 3.7 Policy runtime between L3 and L2 | **Implemented** | `GovernedExecutor` is that runtime; the LLM-facing `ToolSpec` stays read-only metadata. |
+| 3.7 Policy runtime between L3 and L2 | **Implemented + wired** | `GovernedExecutor` is that runtime; `orchestrator.py` now dispatches every tool call through it (`_governed_dispatch`), including the masscan/tshark wrappers via `authorize`. |
 | 3.8 Permission-as-code | **Implemented** | `PolicyEngine.evaluate` is a function of context, not an enum read; DANGER ⇒ `REQUIRES_CONSENT`. |
 | 3.9 Constrained output (native function-calling / GBNF) | **Roadmap** | Depends on the external Kimi CLI's capabilities; the orchestrator's defensive JSON extraction stays as the stdlib fallback. |
 | 3.10 Session provenance | **Implemented (HMAC)** | `AuditLog` chains entries by SHA-256 and tags with HMAC-SHA256 + a self-referential auditor state. Ed25519 + hardware-backed keys = documented upgrade (inject a persisted/HSM key for cross-run non-repudiation). |
@@ -140,9 +140,16 @@ python3 src/governance/engine.py --tool nmap_scan --target 10.0.0.5 \
     --permission danger-full-access --scope 10.0.0.0/8
 ```
 
-Orchestrator integration (next step, not yet wired): swap the orchestrator's direct
-`SecurityToolExecutor` for a `GovernedExecutor` so every Kimi-proposed tool call passes
-through policy + attestation + consent + audit before running.
+Orchestrator integration (**wired**): `orchestrator.py` now routes every Kimi-proposed
+tool call through a `GovernedExecutor` by default. The action loop's dispatch
+(`_governed_dispatch`) sends harness tools through `GovernedExecutor.execute` and the local
+masscan/tshark wrappers through `GovernedExecutor.authorize` (gate-only), so neither path
+can bypass policy + attestation + consent. Each session writes a Mnemosyne mirror —
+`<work_dir>/audit/<session-id>.chain` (the signed chain) and `.pending` (boundary-consent)
+— alongside the existing `results/<session-id>.json`. Governance is on by default; pass
+`--ungoverned` to bypass (test/diagnostic only) and `--network-scope CIDR` to enforce the
+scope gate. In a non-interactive run the default consent gate times out to **DENY**, so a
+`danger-full-access` tool fails closed unless an operator is present to approve it.
 
 ## Verification
 

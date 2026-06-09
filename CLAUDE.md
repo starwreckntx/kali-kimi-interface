@@ -72,8 +72,13 @@ kali-kimi-interface/
   `validate_input`, and `save_manifest`. Run as a CLI to verify integrity or emit a
   manifest.
 - **`orchestrator.py` — `KaliKimiOrchestrator`**: top-level loop. Sends task + available
-  tools to the external Kimi CLI, parses Kimi's JSON tool calls, executes them through
-  `SecurityToolExecutor`, feeds results back. Adds `src/` to `sys.path` at runtime.
+  tools to the external Kimi CLI, parses Kimi's JSON tool calls, executes them, feeds
+  results back. Adds `src/` to `sys.path` at runtime. **Governed by default:** every tool
+  call (including the local masscan/tshark wrappers) is routed through `GovernedExecutor`
+  (`_governed_dispatch`), so policy + attestation + consent + audit gate execution; each
+  session also writes a Mnemosyne audit mirror under `<work_dir>/audit/`. Pass
+  `--ungoverned` to bypass (test/diagnostic only) or `--network-scope CIDR` to enforce the
+  scope gate.
 - **`src/network_mapper.py` — `NetworkMapper`**: discovers devices via WiFi/Ethernet,
   resolves OUI manufacturers, and produces/saves JSON network maps.
 - **`src/governance/` — IRP governance layer**: an *additive*, stdlib-only stack that wraps
