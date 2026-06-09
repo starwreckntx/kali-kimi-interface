@@ -32,12 +32,22 @@ kali-kimi-interface/
 │   ├── kali_tools.py         # KaliToolAdapter: safe wrappers + output parsers
 │   ├── harness_integration.py# SecurityToolExecutor: ToolSpec registry for a harness
 │   ├── tool_registry.py      # VerifiableToolRegistry: 152 tools, SHA-256, schemas
-│   └── network_mapper.py     # NetworkMapper: WiFi + Ethernet discovery
+│   ├── network_mapper.py     # NetworkMapper: WiFi + Ethernet discovery
+│   └── governance/           # IRP governance layer (allowlist, policy, consent, audit)
+│       ├── validation.py     #   positive allowlist validation + SAFE_FLAGS
+│       ├── attestation.py    #   per-invocation binary attestation (PATH/symlink defense)
+│       ├── policy.py         #   PolicyEngine: permission-as-code; DANGER ⇒ consent
+│       ├── consent.py        #   ConsentGate (Mirror_RTC): per-action APPROVE <nonce>
+│       ├── audit.py          #   AuditLog: append-only HMAC hash-chained trail
+│       └── engine.py         #   GovernedExecutor: wires the pipeline + preview CLI
 ├── tests/
 │   ├── test_kali_tools.py    # Adapter tests (validation, parsing, rate limit)
-│   └── test_tool_registry.py # Registry tests (hashing, verification)
+│   ├── test_tool_registry.py # Registry tests (hashing, verification)
+│   └── test_governance.py    # Governance tests (allowlist, attestation, consent, audit)
 ├── docs/
-│   └── KALI_START_MENU_GUIDE.md
+│   ├── KALI_START_MENU_GUIDE.md
+│   ├── METHODOLOGY_CASE_STUDY.md  # How-to on the layered DIY-on-OS methodology
+│   └── IRP_GOVERNANCE.md          # Governance layer spec-to-status + integration guide
 ├── topology/
 │   └── cove-lan-topology.html# Standalone interactive network map visualization
 ├── requirements.txt          # Stdlib-only core; optional deps commented out
@@ -66,6 +76,15 @@ kali-kimi-interface/
   `SecurityToolExecutor`, feeds results back. Adds `src/` to `sys.path` at runtime.
 - **`src/network_mapper.py` — `NetworkMapper`**: discovers devices via WiFi/Ethernet,
   resolves OUI manufacturers, and produces/saves JSON network maps.
+- **`src/governance/` — IRP governance layer**: an *additive*, stdlib-only stack that wraps
+  the executor with stronger gates. `GovernedExecutor` (engine.py) runs every proposed tool
+  call through positive allowlist validation (validation.py) → permission-as-code policy
+  (policy.py, `DANGER ⇒ REQUIRES_CONSENT`) → per-invocation binary attestation
+  (attestation.py) → the Mirror_RTC human consent gate (consent.py, default-deny) → the
+  underlying `SecurityToolExecutor`, recording each step in an append-only HMAC hash-chained
+  audit log (audit.py). **Core invariant:** a `danger-full-access` tool never executes
+  without an operator `APPROVE <nonce>`. It does **not** remove any existing control — the
+  `DANGEROUS_CHARS` blacklist stays as defense-in-depth. See `docs/IRP_GOVERNANCE.md`.
 - **`kali_start_menu.py` / `kali_tools_list.py`**: human-facing front ends. The menu
   builds its own tool database (`_build_tool_database`) and detects installed tools.
 
