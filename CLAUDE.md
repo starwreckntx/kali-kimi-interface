@@ -145,7 +145,7 @@ python3 -m pytest tests/ -v
 ## Security guarantees — do not regress
 
 - **Target validation** (`KaliToolAdapter._validate_target`) rejects empty/non-string
-  input and any of the `DANGEROUS_CHARS` (`; & | \` $ ( ) < > \ \n { }`) to prevent
+  input and any of the `DANGEROUS_CHARS` (``; & | ` $ ( ) < > \ \n { }``) to prevent
   command injection. Commands are executed as **argument arrays** via `subprocess.run`
   (never `shell=True`).
 - **Rate limiting** (`_check_rate_limit`) and **timeouts** (`_execute_tool`) guard against
@@ -169,7 +169,8 @@ python3 -m pytest tests/ -v
 
 ## Git workflow
 
-- Active development branch for this work: `claude/claude-md-docs-wyub5a`.
+- Work on descriptive feature branches (e.g. `feature/<name>`, or `claude/<topic>` for
+  agent-authored changes); don't commit directly to `main`.
 - Commit messages follow a `type: summary` style (e.g. `feat: ...`), often with a short
   scope/impact note. Keep them descriptive.
 - After pushing, open a **draft PR** if none exists.
