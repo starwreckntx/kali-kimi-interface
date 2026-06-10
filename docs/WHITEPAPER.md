@@ -216,14 +216,15 @@ Honesty about what the stdlib tier does *not* solve is a design principle, not a
   guard the boundary. *Upgrade:* native forced tool-use APIs.
 - **Multi-agent coordination is roadmap.** The `preview()` / `execute()` separation exists;
   distributed agent negotiation is not implemented.
-- **Attestation is enforced only for `danger-full-access`.** A `workspace-write` or
-  `read-only` tool whose attestation fails (untrusted path or hash mismatch) is logged but
-  not blocked. Hardening enforcement to `workspace-write` is recommended follow-up.
-- **The interactive menu is outside the governed boundary.** `kali_start_menu.py` is a
-  human-only convenience front-end that runs operator-typed arguments via a shell
-  (`shell=True`); it is not part of the agent execution path and inherits the operator's own
-  privileges. Every guarantee in this paper applies to the `GovernedExecutor` path. Hardening
-  the menu to argument arrays is recommended follow-up.
+- **Attestation is hard-enforced for `danger-full-access` and `workspace-write`.** A tool
+  that mutates state must run a verified binary; an attestation failure (untrusted path or
+  hash mismatch) blocks execution. `read-only` tools remain advisory — their attestation is
+  logged but not blocking — a deliberate scope choice, since they do not mutate state.
+- **The interactive menu runs at operator privilege.** `kali_start_menu.py` is a human-only
+  front-end; it parses operator input with `shlex` and runs argument arrays (`shell=False`),
+  so it does not interpret shell metacharacters, but it still executes at the operator's own
+  privilege and is not gated by `GovernedExecutor`. Every guarantee in this paper applies to
+  the `GovernedExecutor` path.
 
 ## 9. Methodology
 

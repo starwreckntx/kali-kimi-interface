@@ -523,8 +523,8 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 | HMAC key is ephemeral / not persisted | Medium | file read-back verifies the keyless chain; in-process verify checks HMAC | Ed25519 asymmetric signing + HSM |
 | No Linux namespace sandboxing | Medium | process runs as orchestrator UID | `unshare()` / `setcap()` capability dropping |
 | attest→exec disk race + trust-on-first-use baseline | Medium | hash compared to a startup baseline; closes consent→exec swap but not the hash→spawn window | pinned reviewed manifest + fd-pinned exec (`fexecve`) / namespacing |
-| Attestation enforced for `danger-full-access` only | Low | `workspace-write` / `read-only` attestation failures are logged, not blocked | extend hard enforcement to `workspace-write` |
-| Interactive menu uses a shell (`kali_start_menu.py`) | Low | human-only front-end, outside the governed agent path, runs at operator privilege | rewrite to argument arrays |
+| Attestation advisory for `read-only` | Low | danger + workspace-write are hard-enforced; read-only failures are logged, not blocked | extend to read-only if desired |
+| Interactive menu runs at operator privilege (`kali_start_menu.py`) | Low | now uses `shlex` + argument arrays (no shell); still outside the governed agent path | full gating via `GovernedExecutor` |
 | No grammar-constrained model output | Low | defensive JSON extraction + schema validation | native forced tool-use API |
 | masscan/tshark filter validation is allowlist-level | Low | interface allowlist + duration/rate bounds + metachar rejection | full BPF/eBPF validation |
 | Snap-back scoped to `<work_dir>/workspace` | Low | repo-root / `.git` guard; most output is stdout-captured | filesystem (ZFS/Btrfs) snapshots |

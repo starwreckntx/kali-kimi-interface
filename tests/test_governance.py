@@ -400,4 +400,18 @@ class TestGovernedExecutorRegression:
         gov.execute("quick_recon", {"target": "10.0.0.5"})
         ok, bad = gov.audit.verify()
         assert ok and bad is None
+
+    def test_workspace_write_blocked_when_attestation_fails(self):
+        # F2: attestation is enforced for workspace-write, not only danger-full-access.
+        # Point at a real file outside any trusted dir so attestation fails deterministically.
+        fd, bogus = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            gov, ex = _governed("workspace-write", binary_path=bogus, prompt_fn=lambda req: "DENY")
+            out = gov.execute("gobuster_scan", {"target": "10.0.0.5"})
+            assert out.allowed is False
+            assert ex.calls == []                       # underlying executor never reached
+            assert "attestation" in (out.denial_reason or "")
+        finally:
+            os.unlink(bogus)
         assert len(gov.audit.entries) >= 3          # decision + policy + attestation + execution

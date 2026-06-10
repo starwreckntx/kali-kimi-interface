@@ -167,7 +167,9 @@ class GovernedExecutor:
         att = self._attest(tool_name)
         att_dict = att.to_dict() if att else None
         seqs.append(self.audit.log_integrity({"event": "attestation", **(att_dict or {})}).seq)
-        if decision.blast_radius == BlastRadius.DANGER and (att is None or not att.verified):
+        # Attestation is hard-enforced for danger AND workspace-write tools (F2): a tool that
+        # mutates state must run a verified binary. read-only stays advisory (logged only).
+        if decision.blast_radius in (BlastRadius.DANGER, BlastRadius.WRITE) and (att is None or not att.verified):
             return (self._blocked(tool_name, decision, att_dict, None,
                                   f"attestation failed: {att.reason if att else 'no attestation'}", seqs),
                     decision, att_dict, None, seqs)
