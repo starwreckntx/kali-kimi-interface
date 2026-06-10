@@ -13,19 +13,23 @@ second, or `sqlmap` chewing on a login form. The distance between "the model dec
 "it happened" is one function call.
 
 I work around high-consequence physical processes. The rule there is simple and unforgiving:
-understand every layer, control every variable, and build the failsafe yourself before you
-ever pour. You don't trust that nothing will go wrong. You design so that when something
-does, it fails *toward* safety. I wanted the same discipline for an AI operating offensive
-security tools.
+understand every layer, identify and constrain the variables that can hurt you, and build the
+failsafe yourself before you ever pour. You don't trust that nothing will go wrong. You design
+so that when something does, it fails *toward* safety. So I treated the AI agent the way
+industrial systems treat hazardous machinery — interlocks, lockout, and a logbook — not the
+way software usually treats a new feature.
 
 So before I let the agent loose, I built the cage. It's called the **Kali Kimi Interface
 (KKI) IRP Governance Stack**, and the whole thing runs on the Python standard library — no
 exotic dependencies, no daemon, no kernel magic.
 
+Most builders show what their agent *can* do. I want to show what mine was *prevented* from
+doing.
+
 ## The one rule everything else serves
 
-> No dangerous tool runs without passing validation, proving the binary is what it claims to
-> be, getting an explicit human `APPROVE`, and leaving a tamper-evident record.
+> No dangerous tool runs without passing validation, verifying the binary matches an approved
+> fingerprint, getting an explicit human `APPROVE`, and leaving a tamper-evident record.
 
 Everything in the system exists to make that sentence true. Here's how it breaks down.
 
@@ -35,18 +39,27 @@ front. Commands are always run as argument arrays, never as a shell string. Inje
 doesn't get a foothold.
 
 **It checks the *binary* before it runs it.** Every single time a tool is about to execute,
-the system resolves the real path, confirms it lives in a trusted system directory, and takes
-a fresh SHA-256 fingerprint. Swap the binary, hijack the PATH, plant a symlink — the
-fingerprint changes and execution stops.
+the system resolves the real path, confirms it lives in a trusted system directory, and
+verifies a fresh SHA-256 against an approved fingerprint. Swap the binary, hijack the PATH,
+plant a symlink — the fingerprint diverges and execution stops. (To be precise: this verifies
+the binary matches the fingerprint captured at startup; it isn't a claim about supply-chain
+provenance.)
 
 **It asks a human — and means it.** For anything classified `danger-full-access`, the agent
 hits a consent gate. The operator sees the tool, the target, and the binary's hash, plus a
 one-time nonce, and has to type `APPROVE <nonce>` exactly. No answer? Wrong answer? Nobody
 there? All of those mean **no**. The default is deny. Always.
 
-**It remembers, and you can't quietly edit the memory.** Every decision and execution lands
-in an append-only, hash-chained, HMAC-tagged log. Flip a single byte in a saved log later and
-a verification pass will tell you exactly which entry was touched.
+**It keeps a tamper-evident memory.** Every decision and execution lands in an append-only,
+hash-chained, HMAC-tagged log. Flip a single byte in a saved log later and a verification pass
+tells you exactly which entry was touched. (Hash-chaining doesn't stop a privileged actor from
+deleting the file — it makes alteration *evident*, which is the property that matters in an
+audit.)
+
+And here's the part critics miss: none of these four is *the* control. The control is the
+**chain** — validate → attest → rate-limit → approve → audit — and any single link can halt
+the run on its own. The human `APPROVE` is one gate among several, not the whole model. This
+isn't a glorified permission popup; consent is a layer, not the architecture.
 
 ## The part I'm proudest of: it failed correctly
 
@@ -91,9 +104,9 @@ We're going to keep handing capabilities to autonomous systems. The question isn
 the model is smart enough — it's whether the boundary around it is honest, default-deny, and
 auditable. You don't need a research budget or a vendor's black box to build that. A few
 thousand lines of plain Python can keep a human sovereign over the machine and leave a record
-nobody can erase.
+that can't be quietly altered without it showing.
 
-Understand every layer. Control every variable. Build the failsafe yourself.
+Understand every layer. Constrain the variables that can hurt you. Build the failsafe yourself.
 
 ---
 

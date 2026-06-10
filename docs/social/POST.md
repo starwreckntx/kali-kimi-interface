@@ -16,18 +16,25 @@ tool runs without input validation, per-invocation binary attestation, an explic
 ## LinkedIn post
 
 I connected an AI agent to a real penetration-testing toolkit — then I built the cage before
-I opened the door.
+I opened the door. Most builders show what their agent can do. I want to show what mine was
+prevented from doing.
 
 When you wire a language model to live tools, one generated JSON object becomes `nmap` or
 `masscan` running against a real network. The distance between "the model decided to" and "it
-happened" is a single function call. That distance needs a governor.
+happened" is a single function call. I work around high-consequence physical processes, so I
+treated the agent the way industrial systems treat hazardous machinery: interlocks, lockout,
+and a logbook.
 
 So I built the KKI IRP Governance Stack — and the whole thing runs on the Python standard
 library. No exotic dependencies. One rule everything serves:
 
-→ No dangerous tool runs without passing validation, proving the binary's SHA-256 identity,
-getting an explicit human APPROVE + nonce, and leaving an append-only, tamper-evident record.
-Default-deny: no answer, wrong answer, or no operator all mean NO.
+→ No dangerous tool runs without passing validation, verifying the binary against an approved
+SHA-256 fingerprint, getting an explicit human APPROVE + nonce, and leaving an append-only,
+tamper-evident record. Default-deny: no answer, wrong answer, or no operator all mean NO.
+
+And to head off the obvious critique — this isn't a permission popup. Consent is one layer in
+a chain (validate → attest → rate-limit → approve → audit) where any single link can halt the
+run on its own.
 
 The part I'm proudest of: on the first live run on Kali hardware, a test "failed" — the
 governed scan was denied on consent timeout, so it never ran. That wasn't a bug. That was the
