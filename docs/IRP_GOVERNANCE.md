@@ -538,11 +538,21 @@ tests/
 ├── test_governance.py              # 43 tests — validation, policy, consent, audit, attestation, verify_file
 ├── test_kali_tools.py              # 29 tests — L2 adapters, timeout, rate limit, parsing (3 localhost-integration skip in a bare container)
 ├── test_orchestrator_governance.py # 11 tests — wiring, snap-back, CLI rejection, L2 caps, tamper detection
-└── test_tool_registry.py           # 23 tests — registry construction, hashing, verification
+├── test_tool_registry.py           # 23 tests — registry construction, hashing, verification
+└── test_kali_integration.py        #  5 tests — live-binary acceptance checks (2 self-skip without /usr/bin/nmap)
 ```
 
-Total: **103 passed, 3 skipped, 0 failed.** The 3 skips are the localhost `nmap`
-integration scans in `test_kali_tools.py`, which only run where the binary is installed.
+Total in a bare container: **106 passed, 5 skipped, 0 failed.** The 5 skips are 3 localhost
+`nmap` scans in `test_kali_tools.py` plus the 2 binary-gated checks in
+`test_kali_integration.py`, which only run where the tool is installed.
+
+**Validated on real hardware — PurpBox (Kali 6.18.3, Python 3.13.11):** all five
+`test_kali_integration.py` checks pass (the two container-skips execute), including the
+privileged syn-scan path under `sudo`. Confirmed live: `attest_binary("nmap").sha256`
+equals `sha256sum /usr/bin/nmap` with `verified=True`; the consent gate fails closed on
+no-response (`allowed=False`, nmap never runs); the attested hash is bound into the consent
+prompt (`est_impact: "… [sha256:…]"`); and a single-byte flip in the persisted audit chain
+is caught at the exact entry.
 
 ### 9.2 Running the Suite
 
