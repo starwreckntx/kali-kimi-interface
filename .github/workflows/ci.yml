@@ -1,0 +1,46 @@
+name: CI
+
+# Runs the governance + toolkit test suite on every push and pull request.
+# The core is standard-library only, so the only test dependency is pytest. Tests that
+# invoke real binaries (nmap localhost, the live-Kali integration checks) self-skip when
+# the tool is absent, so a stock runner reports 107 passed / 5 skipped, deterministically.
+
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor is 3.6 per CLAUDE.md; this matrix covers a realistic modern range plus the
+        # two versions the stack was validated on (3.11 in CI containers, 3.13 on Kali).
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest (no third-party runtime deps)
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Byte-compile all modules (fast syntax gate)
+        run: python -m compileall -q kali_start_menu.py kali_tools_list.py orchestrator.py src
+
+      - name: Run test suite
+        run: python -m pytest tests/ -v
