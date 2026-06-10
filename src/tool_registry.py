@@ -61,6 +61,21 @@ class ToolVerif:
     input_schema: Dict[str, Any]
     command_template: str
     help_flag: str = "--help"
+    # F4 root-of-trust: manifest_sha256 is the externally-reviewed known-good hash (None in
+    # TOFU mode). boot_status is set at registry build: "ok" | "BLOCKED_AT_BOOT" (on-disk hash
+    # != manifest) | "UNVERIFIED" (installed but absent from the manifest) | "not_installed".
+    manifest_sha256: Optional[str] = None
+    boot_status: str = "ok"
+
+    @property
+    def expected_sha256(self) -> Optional[str]:
+        """The hash attestation must match — the manifest hash when pinned, else the baseline."""
+        return self.manifest_sha256 or self.sha256
+
+    @property
+    def available(self) -> bool:
+        """A tool the agent may use: installed AND cleared by the boot root-of-trust check."""
+        return self.installed and self.boot_status == "ok"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -460,20 +475,78 @@ class VerifiableToolRegistry:
         report = registry.integrity_report()
     """
 
-    def __init__(self):
+    def __init__(self, manifest: Any = None):
+        """Build the registry. When ``manifest`` (a path or a dict of known-good fingerprints)
+        is supplied, F4 root-of-trust mode is engaged: each installed binary's on-disk hash is
+        checked against the manifest at boot and tools that mismatch (or are absent from the
+        manifest) are flagged and excluded from ``available_tools``. Without a manifest the
+        baseline is trust-on-first-use (the engine logs a high-visibility warning)."""
         self.tools: Dict[str, ToolVerif] = {}
+        self.manifest_path: Optional[str] = None
+        self.manifest_fingerprints: Optional[Dict[str, str]] = self._load_manifest(manifest)
+        self.manifest_mode: bool = self.manifest_fingerprints is not None
+        self.root_of_trust: str = "manifest" if self.manifest_mode else "tofu"
         self._build_registry()
+
+    def _load_manifest(self, manifest: Any) -> Optional[Dict[str, str]]:
+        """Normalize a manifest (path or dict) to a flat {path-or-name: sha256} mapping."""
+        if manifest is None:
+            return None
+        if isinstance(manifest, dict):
+            data = manifest
+        else:
+            self.manifest_path = str(manifest)
+            with open(manifest) as f:
+                data = json.load(f)
+        fingerprints: Dict[str, str] = {}
+        # Rich format emitted by save_manifest(): {"tools": {name: {binary_path, sha256, ...}}}.
+        tools = data.get("tools") if isinstance(data, dict) else None
+        if isinstance(tools, dict):
+            for name, rec in tools.items():
+                if isinstance(rec, dict) and rec.get("sha256"):
+                    fingerprints[name] = str(rec["sha256"]).lower()
+                    if rec.get("binary_path"):
+                        fingerprints[str(rec["binary_path"])] = str(rec["sha256"]).lower()
+        # Explicit fingerprints block: {"fingerprints": {path-or-name: sha256}}.
+        block = data.get("fingerprints") if isinstance(data, dict) else None
+        if isinstance(block, dict):
+            for k, v in block.items():
+                if isinstance(v, str):
+                    fingerprints[k] = v.lower()
+        # Bare flat mapping: {path-or-name: sha256}.
+        if not fingerprints and isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, str) and len(v) == 64:
+                    fingerprints[k] = v.lower()
+        return fingerprints
 
     def _build_registry(self):
         for tool_def in TOOL_DEFINITIONS:
             name, category, icon, desc, perm, parser, schema_key, cmd_template, help_flag = tool_def
             binary_path, installed, sha256 = _find_binary(name)
             schema = SCHEMA_MAP.get(schema_key, SCHEMA_EMPTY)
+
+            manifest_sha = None
+            boot_status = "ok" if installed else "not_installed"
+            if self.manifest_mode and installed:
+                known = None
+                if binary_path and binary_path in self.manifest_fingerprints:
+                    known = self.manifest_fingerprints[binary_path]
+                elif name in self.manifest_fingerprints:
+                    known = self.manifest_fingerprints[name]
+                if known is None:
+                    boot_status = "UNVERIFIED"            # installed but not in the manifest
+                elif sha256 is not None and sha256.lower() == known:
+                    boot_status = "ok"; manifest_sha = known
+                else:
+                    boot_status = "BLOCKED_AT_BOOT"; manifest_sha = known
+
             self.tools[name] = ToolVerif(
                 name=name, category=category, icon=icon, description=desc,
                 binary_path=binary_path, installed=installed, sha256=sha256,
                 permission=perm, parser=parser, input_schema=schema,
-                command_template=cmd_template, help_flag=help_flag
+                command_template=cmd_template, help_flag=help_flag,
+                manifest_sha256=manifest_sha, boot_status=boot_status,
             )
 
     def get(self, name: str) -> Optional[ToolVerif]:
@@ -484,6 +557,15 @@ class VerifiableToolRegistry:
 
     def installed_tools(self) -> Dict[str, ToolVerif]:
         return {k: v for k, v in self.tools.items() if v.installed}
+
+    def available_tools(self) -> Dict[str, ToolVerif]:
+        """Installed tools cleared by the boot root-of-trust check (== installed in TOFU mode)."""
+        return {k: v for k, v in self.tools.items() if v.available}
+
+    def boot_blocked(self) -> Dict[str, str]:
+        """{name: boot_status} for installed tools refused at boot under a manifest."""
+        return {k: v.boot_status for k, v in self.tools.items()
+                if v.installed and v.boot_status != "ok"}
 
     def by_category(self, category: str) -> Dict[str, ToolVerif]:
         return {k: v for k, v in self.tools.items() if v.category == category}
@@ -514,7 +596,13 @@ class VerifiableToolRegistry:
         verification_results = self.verify_all()
         tampered = [r for r in verification_results if r.get("tampered")]
         clean = [r for r in verification_results if r.get("verified")]
+        boot_blocked = self.boot_blocked()
         return {
+            "root_of_trust": self.root_of_trust,
+            "manifest_path": self.manifest_path,
+            "available": len(self.available_tools()),
+            "boot_blocked": len(boot_blocked),
+            "boot_blocked_tools": boot_blocked,
             "total_tools": len(self.tools),
             "installed": len(installed),
             "not_installed": len(self.tools) - len(installed),
@@ -585,10 +673,11 @@ if __name__ == "__main__":
     parser.add_argument("--verify", "-v", help="Verify specific tool")
     parser.add_argument("--verify-all", "-V", action="store_true", help="Verify all installed")
     parser.add_argument("--report", "-r", action="store_true", help="Full integrity report")
-    parser.add_argument("--manifest", "-m", help="Save manifest to file")
+    parser.add_argument("--manifest", "-m", help="Load a known-good manifest as the F4 root of trust")
+    parser.add_argument("--save-manifest", "-s", help="Generate a manifest from the current binaries")
     parser.add_argument("--category", "-c", help="Filter by category")
     args = parser.parse_args()
-    registry = VerifiableToolRegistry()
+    registry = VerifiableToolRegistry(manifest=args.manifest)
 
     if args.list:
         tools = registry.by_category(args.category) if args.category else registry.all_tools()
@@ -608,15 +697,20 @@ if __name__ == "__main__":
             print(f"  {status} {r['name']}")
     elif args.report:
         print(json.dumps(registry.integrity_report(), indent=2))
-    elif args.manifest:
-        print(f"Manifest saved: {registry.save_manifest(args.manifest)}")
+    elif args.save_manifest:
+        print(f"Manifest saved: {registry.save_manifest(args.save_manifest)}")
     else:
         report = registry.integrity_report()
         print(f"\n{'='*60}")
         print(f"VERIFIABLE TOOL REGISTRY")
         print(f"{'='*60}")
+        print(f"Root of trust: {report['root_of_trust']}"
+              + (f" ({report['manifest_path']})" if report.get('manifest_path') else ""))
         print(f"Total tools: {report['total_tools']}")
         print(f"Installed:   {report['installed']}")
+        print(f"Available:   {report['available']}")
+        if report['boot_blocked']:
+            print(f"BLOCKED@BOOT: {report['boot_blocked']}  {report['boot_blocked_tools']}")
         print(f"Verified:    {report['verified_clean']}")
         print(f"Tampered:    {report['tampered']}")
         print(f"\nBy category:")

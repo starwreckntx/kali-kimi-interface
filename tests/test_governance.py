@@ -415,3 +415,50 @@ class TestGovernedExecutorRegression:
         finally:
             os.unlink(bogus)
         assert len(gov.audit.entries) >= 3          # decision + policy + attestation + execution
+
+
+class _ManifestRegistry:
+    """Minimal manifest-mode registry: reports a fixed boot_status for the tool's binary."""
+    manifest_mode = True
+    root_of_trust = "manifest"
+    manifest_path = "<test>"
+
+    def __init__(self, permission, binary_path, boot_status):
+        tv = _FakeTV(permission, binary_path)
+        tv.boot_status = boot_status
+        self._tv = tv
+
+    def get(self, name):
+        return self._tv
+
+    def boot_blocked(self):
+        return {} if self._tv.boot_status == "ok" else {"tool": self._tv.boot_status}
+
+
+class TestF4BootGate:
+    """F4 — a binary that fails the manifest root-of-trust at boot is refused for ALL tiers."""
+
+    def test_blocked_at_boot_denied_even_with_approval(self):
+        ex = _FakeExecutor("danger-full-access")
+        reg = _ManifestRegistry("danger-full-access", _trusted_binary(), "BLOCKED_AT_BOOT")
+        gov = GovernedExecutor(executor=ex, registry=reg,
+                               consent=ConsentGate(prompt_fn=lambda req: f"APPROVE {req.nonce}"))
+        out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
+        assert out.allowed is False                 # blocked before attestation/consent
+        assert ex.calls == []
+        assert "boot" in (out.denial_reason or "")
+
+    def test_unverified_blocks_read_only_too(self):
+        ex = _FakeExecutor("read-only")
+        reg = _ManifestRegistry("read-only", None, "UNVERIFIED")
+        gov = GovernedExecutor(executor=ex, registry=reg,
+                               consent=ConsentGate(prompt_fn=lambda req: "DENY"))
+        out = gov.execute("quick_recon", {"target": "10.0.0.5"})
+        assert out.allowed is False                 # root-of-trust gate applies to read-only
+        assert ex.calls == []
+
+    def test_tofu_logs_root_of_trust_warning(self):
+        gov, ex = _governed("read-only")
+        gov.execute("quick_recon", {"target": "10.0.0.5"})   # warning logged on first gate use
+        events = [e.payload.get("event") for e in gov.audit.entries]
+        assert "root_of_trust" in events

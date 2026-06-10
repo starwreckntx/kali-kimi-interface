@@ -137,6 +137,24 @@ class _FakeRegistry:
         return self._tv
 
 
+class _ManifestRegistry:
+    """Manifest-mode registry reporting a fixed boot_status — exercises the F4 root-of-trust gate."""
+    manifest_mode = True
+    root_of_trust = "manifest"
+    manifest_path = "<benchmark>"
+
+    def __init__(self, permission, binary_path, boot_status):
+        tv = _FakeTV(permission, binary_path)
+        tv.boot_status = boot_status
+        self._tv = tv
+
+    def get(self, name):
+        return self._tv
+
+    def boot_blocked(self):
+        return {} if self._tv.boot_status == "ok" else {"tool": self._tv.boot_status}
+
+
 def _governed(permission, binary_path=None, sha256=None, prompt_fn=None, executor=None):
     ex = executor or _FakeExecutor(permission)
     reg = _FakeRegistry(_FakeTV(permission, binary_path, sha256))
@@ -342,6 +360,23 @@ def v10_mid_session_swap_rename() -> Tuple[Status, str]:
     return defeated, f"allowed={out.allowed} executed_rc={ex.returncode} (0=pinned-true,1=swapped-false)"
 
 
+def v11_boot_manifest_mismatch() -> Tuple[Status, str]:
+    """A binary whose on-disk hash != the reviewed manifest is refused at boot (F4)."""
+    b = _trusted_binary()
+    if not b:
+        return None, "no trusted binary on host"
+    from governance.engine import GovernedExecutor
+    from governance.consent import ConsentGate
+    ex = _FakeExecutor("danger-full-access")
+    gov = GovernedExecutor(
+        executor=ex, registry=_ManifestRegistry("danger-full-access", b, "BLOCKED_AT_BOOT"),
+        consent=ConsentGate(prompt_fn=lambda req: f"APPROVE {req.nonce}"))
+    out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
+    # Defeated == refused before attestation/consent, even though the operator would approve.
+    defeated = (not out.allowed) and ex.calls == [] and "boot" in (out.denial_reason or "")
+    return defeated, f"allowed={out.allowed} reason={out.denial_reason!r}"
+
+
 # --------------------------------------------------------------------------- registry
 
 # (id, title, fn, residual?)
@@ -356,6 +391,7 @@ VECTORS: List[Tuple[str, str, Callable[[], Tuple[Status, str]], bool]] = [
     ("V8",  "Delegated-agent reuse",            v8_delegated_agent_reuse,    False),
     ("V9",  "Mid-session swap (in-place)",      v9_mid_session_swap_in_place, False),
     ("V10", "Mid-session swap (rename-replace)", v10_mid_session_swap_rename, False),
+    ("V11", "Boot-time manifest mismatch",      v11_boot_manifest_mismatch,  False),
 ]
 
 

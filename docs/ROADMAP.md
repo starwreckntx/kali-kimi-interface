@@ -2,8 +2,8 @@
 
 **Owner:** Joseph (Starwreck) Byram — Hue & Logic Labs
 **Scope:** Kali Kimi Interface (KKI) governed-autonomy stack
-**Status snapshot:** Phases 0–4 complete · Phase 5 F5 closed (F4 open) · 117 passed / 5 skipped
-· validated on Kali 6.18.3 · adversarial benchmark **10/10 vectors defeated, 0 residual**
+**Status snapshot:** Phases 0–5 complete (F4 + F5 closed) · 126 passed / 5 skipped
+· validated on Kali 6.18.3 · adversarial benchmark **11/11 vectors defeated, 0 residual**
 
 This roadmap absorbs both numbering schemes used so far — the `DH-KKI-IRP-00X` delivery tags
 and the version-tier upgrade paths (`2.2`–`3.0`) in `docs/IRP_GOVERNANCE.md` §10 — into one
@@ -73,9 +73,9 @@ tier, and the findings/components it closes.**
 ## ✅ Phase 4 — Adversarial governance benchmark (LANDED · the "Resultant Seed")
 
 - **Status:** delivered. `tests/test_adversarial_benchmark.py` runs as pytest **and** a
-  standalone `--report` / `--json` scorecard. After Phase 5 it reports **10/10 vectors
-  defeated · 0 residual** (V9 in-place + V10 rename-replace promoted from the former residual).
-  CI runs it on every PR.
+  standalone `--report` / `--json` scorecard. After Phase 5 it reports **11/11 vectors
+  defeated · 0 residual** (V9 in-place + V10 rename-replace promoted from the former residual;
+  V11 boot-time manifest mismatch added with F4). CI runs it on every PR.
 - **Goal:** Turn governance from *descriptive* to *measurable* — a scored red-team suite.
 - **Deliverables:** `tests/test_adversarial_benchmark.py` consolidating existing red-team
   coverage and adding the real gaps, with a `--report` that emits a robustness score.
@@ -98,7 +98,7 @@ tier, and the findings/components it closes.**
 - **Closes:** measurability for F5; sets up Phase 5.
 - **Tier:** T0.
 
-## ◐ Phase 5 — Attestation hardening (F5 ✅ closed · F4 open)
+## ✅ Phase 5 — Attestation hardening (F4 + F5 closed)
 
 - **Goal:** Execute *the exact bytes that were attested*, against a *reviewed* baseline.
 - **Deliverables:**
@@ -108,9 +108,12 @@ tier, and the findings/components it closes.**
     executes the pinned inode via `/proc/self/fd/<fd>` (no `os.fexecve` in stdlib). Adapter
     uses the pin through a `ContextVar`, so the argument-array ABI is unchanged. Closes both
     swap modes — benchmark V9 (in-place) + V10 (rename-replace) now DEFEATED.
-  - **F4 — pinned manifest (open):** `--manifest <file>` loads reviewed known-good hashes (via
-    `VerifiableToolRegistry.save_manifest`/load) so attestation compares against a pinned
-    baseline instead of trust-on-first-use.
+  - **F4 — pinned manifest ✅ DONE:** `VerifiableToolRegistry(manifest=…)` / `--manifest`
+    loads reviewed known-good hashes as the root of trust. At `_build_registry()` each installed
+    binary is checked against the manifest: mismatch → `BLOCKED_AT_BOOT`, unlisted → `UNVERIFIED`;
+    both are dropped from `available_tools()` and the engine refuses them at boot for **all**
+    tiers (before attestation/consent). Without a manifest the baseline is TOFU and the engine
+    logs a high-visibility `root_of_trust` warning. Benchmark V11 covers it.
 - **Acceptance:** Phase 4's mid-session-swap and path-divergence tests pass; a tampered
   binary fails even when it sits in a trusted dir.
 - **Closes:** F4, F5.
@@ -207,7 +210,7 @@ with zero third-party packages through Phase 6.
 | F1 TOCTOU/shell doc overstatement | 3 | ✅ fixed |
 | F2 attestation danger-only | 3 | ✅ fixed (now danger + workspace-write) |
 | F3 menu `shell=True` injection | 3 | ✅ fixed |
-| F4 trust-on-first-use baseline | 5 | planned (pinned manifest) |
+| F4 trust-on-first-use baseline | 5 | ✅ closed (manifest root of trust + boot gate) |
 | F5 attested-path ≠ executed-path | 5 | ✅ closed (fd-pinned exec + pre-exec re-hash) |
 | F6 HMAC session-local | 7 | planned (Ed25519) |
 | F7 unused `authorize()` | 6 | prune during reconciliation |

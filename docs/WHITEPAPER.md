@@ -169,22 +169,23 @@ root or a `.git` checkout) and roll back on failure or denial.
 
 ## 6. Verification & Results
 
-**Automated suite.** The repository ships six test files (122 cases:
-`test_governance.py` 44, `test_kali_tools.py` 29, `test_tool_registry.py` 23,
+**Automated suite.** The repository ships six test files (131 cases:
+`test_governance.py` 47, `test_kali_tools.py` 29, `test_tool_registry.py` 28,
 `test_orchestrator_governance.py` 11, `test_kali_integration.py` 5,
-`test_adversarial_benchmark.py` 10). In a bare container the result is **117 passed, 5
+`test_adversarial_benchmark.py` 11). In a bare container the result is **126 passed, 5
 skipped, 0 failed**; the five skips are localhost/live-binary checks that only run where the
 tools are installed.
 
 **Adversarial robustness (measurable).** `test_adversarial_benchmark.py` doubles as a
-standalone scorecard (`--report` / `--json`) that drives ten attacks at the gate — command
+standalone scorecard (`--report` / `--json`) that drives eleven attacks at the gate — command
 injection, PATH hijack, hash mismatch, audit-log tampering, consent default-deny, nonce
-replay, approval spoofing, delegated-agent session reuse, and both mid-session binary-swap
-modes (in-place rewrite and rename-replace) — and reports **10/10 vectors defeated, 0
-residual**. The two swap vectors were the former F5 residual: Phase 5 closed them with
-fd-pinned execution plus a pre-exec re-hash (in-place is caught by the re-hash; rename-replace
-by the pin), and the strict-xfail tripwire that tracked them has fired and been retired. This
-is the point of the artifact: governance robustness is a number, not an adjective.
+replay, approval spoofing, delegated-agent session reuse, both mid-session binary-swap modes
+(in-place rewrite and rename-replace), and a boot-time manifest mismatch — and reports
+**11/11 vectors defeated, 0 residual**. The two swap vectors were the former F5 residual,
+closed in Phase 5 by fd-pinned execution plus a pre-exec re-hash; the boot-mismatch vector
+exercises the F4 manifest root of trust. The strict-xfail tripwire that tracked the swap
+residual fired and was retired. This is the point of the artifact: governance robustness is a
+number, not an adjective.
 
 **Live-hardware acceptance.** The five-check acceptance suite was executed on real Kali
 hardware (Kali 6.18.3, Python 3.13.11), and all five pass — including the privileged syn-scan

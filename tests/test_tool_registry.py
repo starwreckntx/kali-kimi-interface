@@ -187,5 +187,56 @@ class TestSerialization:
             assert tool_data["installed"] is True
 
 
+def _an_installed_tool(reg):
+    for name, tv in reg.installed_tools().items():
+        if tv.sha256:
+            return name, tv
+    return None, None
+
+
+class TestF4Manifest:
+    """F4 — a reviewed manifest replaces trust-on-first-use as the attestation root of trust."""
+
+    def test_no_manifest_is_tofu(self):
+        reg = VerifiableToolRegistry()
+        assert reg.manifest_mode is False
+        assert reg.root_of_trust == "tofu"
+
+    def test_rich_and_flat_manifest_formats_load(self):
+        rich = VerifiableToolRegistry(manifest={"tools": {"foo": {"binary_path": "/x/foo", "sha256": "AB" * 32}}})
+        assert rich.manifest_fingerprints.get("foo") == "ab" * 32
+        assert rich.manifest_fingerprints.get("/x/foo") == "ab" * 32
+        flat = VerifiableToolRegistry(manifest={"/usr/bin/nmap": "CD" * 32})
+        assert flat.manifest_mode is True
+        assert flat.manifest_fingerprints.get("/usr/bin/nmap") == "cd" * 32
+
+    def test_manifest_match_stays_available(self):
+        name, tv = _an_installed_tool(VerifiableToolRegistry())
+        if not name:
+            pytest.skip("no installed registry tool on this host")
+        reg = VerifiableToolRegistry(manifest={tv.binary_path: tv.sha256})
+        t = reg.get(name)
+        assert t.boot_status == "ok" and t.available is True
+        assert reg.root_of_trust == "manifest"
+
+    def test_manifest_mismatch_blocked_at_boot(self):
+        name, tv = _an_installed_tool(VerifiableToolRegistry())
+        if not name:
+            pytest.skip("no installed registry tool on this host")
+        reg = VerifiableToolRegistry(manifest={tv.binary_path: "00" * 32})
+        t = reg.get(name)
+        assert t.boot_status == "BLOCKED_AT_BOOT"
+        assert t.available is False
+        assert name in reg.boot_blocked()
+
+    def test_installed_but_unlisted_is_unverified(self):
+        name, tv = _an_installed_tool(VerifiableToolRegistry())
+        if not name:
+            pytest.skip("no installed registry tool on this host")
+        reg = VerifiableToolRegistry(manifest={"not-a-real-tool-xyz": "ab" * 32})
+        t = reg.get(name)
+        assert t.boot_status == "UNVERIFIED" and t.available is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

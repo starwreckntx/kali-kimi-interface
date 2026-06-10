@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from harness_integration import SecurityToolExecutor
+from tool_registry import VerifiableToolRegistry
 from kali_tools import SecurityToolResult, SecurityToolError
 from governance.engine import GovernedExecutor, GovernedResult
 from governance.policy import PolicyEngine
@@ -169,6 +170,7 @@ class KaliKimiOrchestrator:
         network_scope: Optional[List[str]] = None,
         consent_prompt: Any = None,
         consent_timeout: float = 30.0,
+        manifest: Optional[str] = None,
     ):
         self.verbose = verbose
         self.work_dir = str(Path(work_dir).expanduser().resolve()) if work_dir else str(DEFAULT_WORK_DIR)
@@ -178,8 +180,11 @@ class KaliKimiOrchestrator:
         if executor is not None:
             self.executor = executor
         elif governed:
+            # F4: a manifest engages the verifiable root of trust; without one the registry
+            # falls back to trust-on-first-use and the engine logs a high-visibility warning.
             self.executor = GovernedExecutor(
                 executor=SecurityToolExecutor(),
+                registry=VerifiableToolRegistry(manifest=manifest),
                 policy=PolicyEngine(network_scope=network_scope),
                 consent=ConsentGate(prompt_fn=consent_prompt, timeout=consent_timeout),
                 audit=AuditLog(),
@@ -579,6 +584,8 @@ def main():
     parser.add_argument("--work-dir", help="Working directory for Kimi (default: repo root)")
     parser.add_argument("--network-scope", action="append",
                         help="Allowed target CIDR for the governance scope gate (repeatable)")
+    parser.add_argument("--manifest",
+                        help="Known-good tool manifest (F4 root of trust); omit to fall back to TOFU")
     parser.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -591,6 +598,7 @@ def main():
             kimi_cli=args.kimi_cli,
             work_dir=args.work_dir,
             network_scope=args.network_scope,
+            manifest=args.manifest,
         )
         result = orchestrator.run_assessment(
             target=args.target,

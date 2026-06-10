@@ -55,6 +55,10 @@ def _load_harness():
     return SecurityToolExecutor, VerifiableToolRegistry
 
 
+# Emit the trust-on-first-use stderr warning at most once per process (audit logs it always).
+_TOFU_STDERR_WARNED = False
+
+
 @dataclass
 class ExecutionPreCheck:
     """Read-only pre-flight summary of a proposed call (no consent, no execution).
@@ -113,6 +117,48 @@ class GovernedExecutor:
         self.policy = policy or PolicyEngine(network_scope=network_scope)
         self.consent = consent or ConsentGate(prompt_fn=consent_prompt, timeout=consent_timeout)
         self.audit = audit or AuditLog()
+        self._rot_logged = False
+
+    def _log_root_of_trust(self) -> None:
+        """Record the attestation root of trust (F4) once, on first governance invocation — not
+        at construction, so a session that never reaches the gate creates no audit entries. A
+        manifest is the verifiable baseline; its absence is a high-visibility TOFU warning."""
+        if self._rot_logged:
+            return
+        self._rot_logged = True
+        if getattr(self.registry, "root_of_trust", "tofu") == "manifest":
+            blocked = (self.registry.boot_blocked() if hasattr(self.registry, "boot_blocked") else {})
+            self.audit.log_integrity({
+                "event": "root_of_trust", "mode": "manifest",
+                "manifest_path": getattr(self.registry, "manifest_path", None),
+                "boot_blocked": blocked,
+            })
+        else:
+            self.audit.log_integrity({
+                "event": "root_of_trust", "mode": "tofu",
+                "warning": "no manifest provided — the attestation baseline is trust-on-first-use; "
+                           "the binary set present at startup is itself unverified",
+            })
+            global _TOFU_STDERR_WARNED
+            if not _TOFU_STDERR_WARNED:
+                _TOFU_STDERR_WARNED = True
+                try:
+                    sys.stderr.write("[KKI] WARNING: governance operating WITHOUT a verified "
+                                     "manifest (trust-on-first-use root of trust)\n")
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _expected_sha256(tv: Any) -> Optional[str]:
+        """The hash attestation must match: the manifest hash when pinned, else the baseline."""
+        return getattr(tv, "expected_sha256", None) or getattr(tv, "sha256", None)
+
+    def _boot_status(self, tool_name: str) -> Optional[str]:
+        """Boot root-of-trust status for a tool, or None when not in manifest mode."""
+        if not getattr(self.registry, "manifest_mode", False):
+            return None
+        tv = self.registry.get(self._binary_name(tool_name)) if self.registry else None
+        return getattr(tv, "boot_status", "UNVERIFIED") if tv is not None else "UNVERIFIED"
 
     # --- permission/identity resolution ---------------------------------------------
 
@@ -135,7 +181,8 @@ class GovernedExecutor:
         tv = self.registry.get(self._binary_name(tool_name)) if self.registry else None
         if tv is None:
             return attest_binary(self._binary_name(tool_name))
-        return attest_binary(tv.binary_path or self._binary_name(tool_name), expected_sha256=tv.sha256)
+        return attest_binary(tv.binary_path or self._binary_name(tool_name),
+                             expected_sha256=self._expected_sha256(tv))
 
     # --- the governed execution pipeline --------------------------------------------
 
@@ -151,6 +198,8 @@ class GovernedExecutor:
         if permission is None:
             permission = self._permission_for(tool_name)
 
+        self._log_root_of_trust()   # F4: record the root of trust once, on first gate use.
+
         seqs.append(self.audit.log_decision({
             "event": "proposal", "tool": tool_name, "params": params, "permission": permission,
             "operator": os.environ.get("KKI_OPERATOR_ID", "unknown"),
@@ -162,6 +211,20 @@ class GovernedExecutor:
         if decision.authorization == Authorization.DENIED:
             return (self._blocked(tool_name, decision, None, None,
                                   "; ".join(decision.reasons) or "policy denied", seqs),
+                    decision, None, None, seqs)
+
+        # 1b. F4 boot root-of-trust gate (manifest mode only): a binary that failed the manifest
+        #     check at startup — mismatch (BLOCKED_AT_BOOT) or absent (UNVERIFIED) — is refused
+        #     for ALL tiers, so the agent never reaches a compromised or unreviewed binary.
+        boot = self._boot_status(tool_name)
+        if boot is not None and boot != "ok":
+            seqs.append(self.audit.log_integrity({
+                "event": "boot_blocked", "tool": tool_name, "boot_status": boot,
+                "root_of_trust": "manifest",
+            }).seq)
+            return (self._blocked(tool_name, decision, None, None,
+                                  f"blocked at boot ({boot}): not verified against the manifest root of trust",
+                                  seqs),
                     decision, None, None, seqs)
 
         # 2. Per-invocation binary attestation (reuse the pinned attestation when provided so
@@ -219,7 +282,7 @@ class GovernedExecutor:
         """Gate + execute an enforced-tier tool with its binary inode pinned end to end."""
         binary = self._binary_name(tool_name)
         tv = self.registry.get(binary) if self.registry else None
-        expected = getattr(tv, "sha256", None) if tv is not None else None
+        expected = self._expected_sha256(tv) if tv is not None else None
         bin_ref = (getattr(tv, "binary_path", None) or binary) if tv is not None else binary
 
         # The fd is held across gate + consent and closed by pin_binary on EVERY exit path.
