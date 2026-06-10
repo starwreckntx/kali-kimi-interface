@@ -157,14 +157,27 @@ class KaliToolAdapter:
         
         start = time.time()
         timeout = custom_timeout or self.timeout
-        
+
+        # If the governance engine pinned this binary's inode, execute the pinned fd via
+        # /proc/self/fd (no path re-resolution) so the bytes attested are the bytes run.
+        # Falls back to a normal path exec when no pin is active (standalone / read-only use).
+        pin = None
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
+            from governance.attestation import get_active_pin
+            pin = get_active_pin()
+        except Exception:
+            pin = None
+
+        try:
+            if pin is not None and getattr(pin, "fd", None) is not None:
+                result = pin.run(cmd, capture_output=True, text=True, timeout=timeout)
+            else:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
         except subprocess.TimeoutExpired:
             raise SecurityToolError(f"Command timed out after {timeout}s")
         except FileNotFoundError:

@@ -512,7 +512,7 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 | Bounded resources | rate limit + timeout + output truncation | runaway loops, context flooding |
 | Schema-checked inputs | JSON Schema per `ToolSpec` | malformed-but-typed calls |
 | Permission awareness | policy-as-code with `danger-full-access` gate | model reasoning / social engineering |
-| Tool integrity | per-invocation SHA-256 + realpath containment | PATH hijack, symlink, binary swap |
+| Tool integrity | per-invocation SHA-256 + realpath containment; fd-pinned exec + pre-exec re-hash on enforced tiers | PATH hijack, symlink, binary swap (incl. mid-session) |
 | Non-repudiable audit | SHA-256 hash chain (+ optional HMAC) | log deletion, entry edit, reorder |
 | Operator sovereignty | `ConsentGate` nonce + default-deny | automated override, timed bypass |
 
@@ -522,7 +522,8 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 |---|---|---|---|
 | HMAC key is ephemeral / not persisted | Medium | file read-back verifies the keyless chain; in-process verify checks HMAC | Ed25519 asymmetric signing + HSM |
 | No Linux namespace sandboxing | Medium | process runs as orchestrator UID | `unshare()` / `setcap()` capability dropping |
-| attest→exec disk race + trust-on-first-use baseline | Medium | hash compared to a startup baseline; closes consent→exec swap but not the hash→spawn window | pinned reviewed manifest + fd-pinned exec (`fexecve`) / namespacing |
+| Trust-on-first-use hash baseline (F4) | Low | gate-time hash compared to a baseline captured at registry build; detects post-startup change | pinned reviewed manifest (`save_manifest`/load) |
+| Sub-µs re-hash→`execve` window | Info | enforced tiers pin the inode by fd and re-hash before exec; `execve` maps the inode atomically | kernel atomic check-and-exec (not in stdlib) |
 | Attestation advisory for `read-only` | Low | danger + workspace-write are hard-enforced; read-only failures are logged, not blocked | extend to read-only if desired |
 | Interactive menu runs at operator privilege (`kali_start_menu.py`) | Low | now uses `shlex` + argument arrays (no shell); still outside the governed agent path | full gating via `GovernedExecutor` |
 | No grammar-constrained model output | Low | defensive JSON extraction + schema validation | native forced tool-use API |

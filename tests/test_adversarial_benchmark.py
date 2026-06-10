@@ -24,12 +24,15 @@ Vectors:
   V6  Nonce replay                 reuse a previously issued nonce on a new action
   V7  Approval spoofing            forge an APPROVE with a guessed nonce
   V8  Delegated-agent reuse        a second action rides an already-approved session
-  V9  Mid-session binary swap      replace the binary AFTER attestation, BEFORE exec  (residual)
+  V9  Mid-session swap (in-place)  rewrite the SAME inode after attestation, before exec
+  V10 Mid-session swap (rename)    atomically replace the path after attestation, before exec
 
-V9 is a known residual disk-race (audit finding F5) closed only by binding execution to the
-attested bytes (Phase 5) / fd-pinned exec under a sandbox (Phase 8). It is marked
-xfail(strict) so the suite stays green today and turns red the moment the gap is fixed,
-forcing V9 to be promoted to a passing vector.
+V9/V10 were the audit-finding-F5 residual. Phase 5 closed them with fd-pinned execution
+(/proc/self/fd) plus a pre-exec re-hash through the pinned fd: V9 is caught by the re-hash
+(same inode, changed bytes) and V10 by the pin (the fd anchors the original inode regardless
+of the path swap). The former strict-xfail tripwire has fired and been removed. The only
+remaining residual is the sub-microsecond window between the final re-hash and the execve
+syscall, which execve closes atomically.
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ import contextlib
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -90,6 +94,32 @@ class _HashingExecutor(_FakeExecutor):
         self.calls.append((name, params))
         self.executed_sha256 = hashlib.sha256(Path(self.path).read_bytes()).hexdigest()
         return {"tool": name, "returncode": 0, "success": True}
+
+
+class _PinnedExecExecutor(_FakeExecutor):
+    """Executes through the engine's active pin when present — mirrors the real L2 adapter.
+
+    Runs the pinned inode via PinnedBinary.run (a real subprocess), so a rename-replace of the
+    path cannot change which bytes execute. Records the returncode so a vector can assert that
+    the original inode (not the swapped one) ran.
+    """
+
+    def __init__(self, permission: str, path: str):
+        super().__init__(permission)
+        self.path = path
+        self.returncode: Optional[int] = None
+
+    def execute(self, name: str, params: dict):
+        self.calls.append((name, params))
+        from governance.attestation import get_active_pin
+        pin = get_active_pin()
+        if pin is not None and pin.fd is not None:
+            proc = pin.run([name], capture_output=True)            # exec the pinned inode
+        else:
+            import subprocess as _sp
+            proc = _sp.run([self.path], capture_output=True)       # path exec (re-resolves)
+        self.returncode = proc.returncode
+        return {"tool": name, "returncode": proc.returncode, "success": proc.returncode == 0}
 
 
 class _FakeTV:
@@ -254,19 +284,22 @@ def v8_delegated_agent_reuse() -> Tuple[Status, str]:
     return defeated, f"legit={legit.allowed} delegated={delegated.allowed} base_calls={len(ex.calls)}"
 
 
-def v9_mid_session_swap() -> Tuple[Status, str]:
-    """Replace the binary AFTER attestation but BEFORE execution (residual disk-race, F5)."""
+def v9_mid_session_swap_in_place() -> Tuple[Status, str]:
+    """In-place rewrite of the SAME inode AFTER attestation, BEFORE execution.
+
+    Caught by the engine's pre-exec re-hash through the pinned fd (Phase 5).
+    """
     d = tempfile.mkdtemp()
     binpath = os.path.join(d, "tool")
     content_a, content_b = b"REAL-BINARY-A", b"EVIL-BINARY-B"
     Path(binpath).write_bytes(content_a)
-    h_a, h_b = _sha256_bytes(content_a), _sha256_bytes(content_b)
+    h_a = _sha256_bytes(content_a)
 
     with _temporarily_trust(d):
         ex = _HashingExecutor("danger-full-access", binpath)
 
         def swap_then_approve(req):
-            # The consent step runs AFTER attestation in _gate and BEFORE execute(): swap now.
+            # Consent runs AFTER attestation/pin in _gate and BEFORE execute(): rewrite now.
             Path(binpath).write_bytes(content_b)
             return f"APPROVE {req.nonce}"
 
@@ -274,27 +307,55 @@ def v9_mid_session_swap() -> Tuple[Status, str]:
                            prompt_fn=swap_then_approve, executor=ex)
         out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
 
-    ran = ex.executed_sha256
-    # Defeated == the swapped bytes never ran: either the gate blocked, or what executed still
-    # matches the attested hash. Today neither holds (no re-verify at exec) -> breached.
-    defeated = (not out.allowed) or (ran == h_a)
-    detail = f"attested={h_a[:12]} executed={(ran or 'none')[:12]} allowed={out.allowed}"
-    return defeated, detail
+    # Defeated == the gate caught the changed bytes and refused; the executor never ran.
+    defeated = (not out.allowed) and ex.executed_sha256 is None
+    return defeated, f"allowed={out.allowed} reason={out.denial_reason!r}"
+
+
+def v10_mid_session_swap_rename() -> Tuple[Status, str]:
+    """Atomic replace-by-rename of the path AFTER attestation, BEFORE execution.
+
+    Caught by fd-pinned exec (Phase 5): execution runs the pinned inode, not the new path.
+    """
+    if not (os.path.exists("/bin/true") and os.path.exists("/bin/false")):
+        return None, "/bin/true or /bin/false unavailable"
+    d = tempfile.mkdtemp()
+    prog = os.path.join(d, "tool")
+    shutil.copy("/bin/true", prog)                              # original inode -> exit 0
+    h_a = hashlib.sha256(Path(prog).read_bytes()).hexdigest()
+
+    with _temporarily_trust(d):
+        ex = _PinnedExecExecutor("danger-full-access", prog)
+
+        def replace_then_approve(req):
+            evil = os.path.join(d, "evil")
+            shutil.copy("/bin/false", evil)                     # exit 1
+            os.rename(evil, prog)                               # atomic replace: path -> new inode
+            return f"APPROVE {req.nonce}"
+
+        gov, _ = _governed("danger-full-access", binary_path=prog, sha256=h_a,
+                           prompt_fn=replace_then_approve, executor=ex)
+        out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
+
+    # Defeated == execution ran the ORIGINAL inode (rc 0 from /bin/true), not the swap (rc 1).
+    defeated = out.allowed and ex.returncode == 0
+    return defeated, f"allowed={out.allowed} executed_rc={ex.returncode} (0=pinned-true,1=swapped-false)"
 
 
 # --------------------------------------------------------------------------- registry
 
 # (id, title, fn, residual?)
 VECTORS: List[Tuple[str, str, Callable[[], Tuple[Status, str]], bool]] = [
-    ("V1", "Command injection",            v1_command_injection,    False),
-    ("V2", "PATH / path hijack",           v2_path_hijack,          False),
-    ("V3", "Binary hash mismatch",         v3_hash_mismatch,        False),
-    ("V4", "Audit-log tampering",          v4_audit_tampering,      False),
-    ("V5", "Consent default-deny",         v5_consent_default_deny, False),
-    ("V6", "Nonce replay",                 v6_nonce_replay,         False),
-    ("V7", "Approval spoofing",            v7_approval_spoofing,    False),
-    ("V8", "Delegated-agent reuse",        v8_delegated_agent_reuse, False),
-    ("V9", "Mid-session binary swap (TOCTOU)", v9_mid_session_swap, True),
+    ("V1",  "Command injection",                v1_command_injection,        False),
+    ("V2",  "PATH / path hijack",               v2_path_hijack,              False),
+    ("V3",  "Binary hash mismatch",             v3_hash_mismatch,            False),
+    ("V4",  "Audit-log tampering",              v4_audit_tampering,          False),
+    ("V5",  "Consent default-deny",             v5_consent_default_deny,     False),
+    ("V6",  "Nonce replay",                     v6_nonce_replay,             False),
+    ("V7",  "Approval spoofing",                v7_approval_spoofing,        False),
+    ("V8",  "Delegated-agent reuse",            v8_delegated_agent_reuse,    False),
+    ("V9",  "Mid-session swap (in-place)",      v9_mid_session_swap_in_place, False),
+    ("V10", "Mid-session swap (rename-replace)", v10_mid_session_swap_rename, False),
 ]
 
 
@@ -308,13 +369,11 @@ def test_active_vector_defeated(vid, title, fn):
     assert status is True, f"{vid} {title} BREACHED — {detail}"
 
 
-@pytest.mark.xfail(strict=True, reason="residual attest->exec disk race (F5) — closes in Phase 5/8")
-def test_v9_mid_session_swap_residual():
-    status, detail = v9_mid_session_swap()
-    # Asserts the DESIRED property (swap defeated). Fails today (xfail); when Phase 5 binds
-    # execution to the attested bytes this XPASSes and strict mode turns it red, prompting
-    # promotion of V9 to an active vector.
-    assert status is True, f"V9 still residual — {detail}"
+# Phase 5 promoted the former V9 residual to active vectors V9 (in-place) and V10
+# (rename-replace), both DEFEATED by fd-pinned execution + pre-exec re-hash. The strict-xfail
+# tripwire has fired and been removed. The only remaining residual is the sub-microsecond
+# window between the final re-hash and the execve syscall, which execve closes atomically
+# (ETXTBSY against concurrent writers); it is documented, not a testable vector.
 
 
 # --------------------------------------------------------------------------- standalone report

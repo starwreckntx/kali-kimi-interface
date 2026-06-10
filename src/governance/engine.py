@@ -33,12 +33,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     from .policy import PolicyEngine, Authorization, BlastRadius, PolicyDecision
-    from .attestation import attest_binary, Attestation
+    from .attestation import attest_binary, Attestation, pin_binary, active_pin
     from .consent import ConsentGate, ConsentDecision, PromptFn
     from .audit import AuditLog
 except ImportError:  # direct execution
     from policy import PolicyEngine, Authorization, BlastRadius, PolicyDecision
-    from attestation import attest_binary, Attestation
+    from attestation import attest_binary, Attestation, pin_binary, active_pin
     from consent import ConsentGate, ConsentDecision, PromptFn
     from audit import AuditLog
 
@@ -141,6 +141,7 @@ class GovernedExecutor:
 
     def _gate(
         self, tool_name: str, params: Dict[str, Any], permission: Optional[str] = None,
+        attestation: Optional[Attestation] = None,
     ) -> Tuple[Optional[GovernedResult], PolicyDecision, Optional[Dict[str, Any]], Optional[Dict[str, Any]], List[int]]:
         """Run the full governance gate (policy -> attestation -> consent) but do NOT
         execute. Returns (blocked_result, decision, attestation, consent, audit_seqs).
@@ -163,8 +164,9 @@ class GovernedExecutor:
                                   "; ".join(decision.reasons) or "policy denied", seqs),
                     decision, None, None, seqs)
 
-        # 2. Per-invocation binary attestation.
-        att = self._attest(tool_name)
+        # 2. Per-invocation binary attestation (reuse the pinned attestation when provided so
+        #    the operator approves — and we re-verify against — the exact pinned inode).
+        att = attestation if attestation is not None else self._attest(tool_name)
         att_dict = att.to_dict() if att else None
         seqs.append(self.audit.log_integrity({"event": "attestation", **(att_dict or {})}).seq)
         # Attestation is hard-enforced for danger AND workspace-write tools (F2): a tool that
@@ -197,12 +199,54 @@ class GovernedExecutor:
         return None, decision, att_dict, consent_dict, seqs
 
     def execute(self, tool_name: str, params: Dict[str, Any]) -> GovernedResult:
-        """Gate the proposal and, only if cleared, run the underlying executor."""
-        blocked, decision, att_dict, consent_dict, seqs = self._gate(tool_name, params)
+        """Gate the proposal and, only if cleared, run the underlying executor.
+
+        Enforced tiers (danger-full-access, workspace-write) run through the fd-pinned pipeline:
+        the binary's inode is pinned at attestation time, re-hashed immediately before exec,
+        and executed via the pinned fd — guaranteeing the bytes hashed are the bytes run.
+        read-only stays on the lightweight path (attestation advisory, no pin).
+        """
+        permission = self._permission_for(tool_name)
+        if BlastRadius.from_permission(permission) in (BlastRadius.DANGER, BlastRadius.WRITE):
+            return self._execute_pinned(tool_name, params, permission)
+
+        blocked, decision, att_dict, consent_dict, seqs = self._gate(tool_name, params, permission)
         if blocked is not None:
             return blocked
+        return self._dispatch(tool_name, params, decision, att_dict, consent_dict, seqs)
 
-        # Cleared — run the underlying executor.
+    def _execute_pinned(self, tool_name: str, params: Dict[str, Any], permission: str) -> GovernedResult:
+        """Gate + execute an enforced-tier tool with its binary inode pinned end to end."""
+        binary = self._binary_name(tool_name)
+        tv = self.registry.get(binary) if self.registry else None
+        expected = getattr(tv, "sha256", None) if tv is not None else None
+        bin_ref = (getattr(tv, "binary_path", None) or binary) if tv is not None else binary
+
+        # The fd is held across gate + consent and closed by pin_binary on EVERY exit path.
+        with pin_binary(bin_ref, expected_sha256=expected) as pinned:
+            blocked, decision, att_dict, consent_dict, seqs = self._gate(
+                tool_name, params, permission, attestation=pinned.attestation)
+            if blocked is not None:
+                return blocked
+
+            # Pre-exec re-hash THROUGH the pinned fd — catches an in-place rewrite during the
+            # consent wait, and fails closed if the inode could not be pinned (e.g. no procfs).
+            if not pinned.recheck():
+                seqs.append(self.audit.log_integrity({
+                    "event": "attestation_recheck_failed", "tool": tool_name, "binary": bin_ref,
+                    "pinned": pinned.pinned,
+                }).seq)
+                return self._blocked(
+                    tool_name, decision, att_dict, consent_dict,
+                    "attestation recheck failed: binary changed or could not be pinned between gate and exec",
+                    seqs)
+
+            # Dispatch with the pin active so the L2 adapter execs the pinned inode, not the path.
+            with active_pin(pinned):
+                return self._dispatch(tool_name, params, decision, att_dict, consent_dict, seqs)
+
+    def _dispatch(self, tool_name, params, decision, att_dict, consent_dict, seqs) -> GovernedResult:
+        """Run the underlying executor for an already-cleared proposal and log the execution."""
         try:
             result = self.executor.execute(tool_name, params)
         except Exception as e:  # executor is expected to return error dicts, but be safe

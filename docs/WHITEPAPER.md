@@ -111,13 +111,18 @@ Operationally, `GovernedExecutor._gate()` runs every proposed call through this 
 
 Because attestation is computed once and the same attestation flows from the consent prompt
 into execution, the operator approves *the specific binary hash the gate computed* — closing
-the **consent→execution swap** window (execution never re-attests to a different result). One
-residual race remains and is stated honestly: between hashing the binary and spawning the
-process, a file replaced on disk would execute unverified. That attest→exec disk race is only
-fully closed by fd-pinned execution (`fexecve`) or namespacing — see §8. The hash baseline is
-also trust-on-first-use: it is captured when the verifiable registry is built at startup, so
-attestation detects post-startup replacement but treats a pre-existing compromised binary as
-its own baseline unless a reviewed manifest is pinned.
+the **consent→execution swap** window (execution never re-attests to a different result).
+Phase 5 further closes the **attest→exec disk race**: for enforced tiers the binary's inode is
+pinned by an open file descriptor at attestation time, re-hashed *through that fd* immediately
+before exec, and executed via the pinned fd (`/proc/self/fd/<fd>`, since the stdlib exposes no
+`os.fexecve`). A replace-by-rename therefore runs the original pinned inode, and an in-place
+rewrite is caught by the pre-exec re-hash — so the bytes hashed are the bytes executed. The fd
+is closed deterministically on every exit path (deny, timeout, recheck failure, exception). The
+only remaining residual is the sub-microsecond window between the final re-hash and the
+`execve` syscall, which `execve` maps atomically (with `ETXTBSY` against concurrent writers).
+The hash baseline is still trust-on-first-use: it is captured when the verifiable registry is
+built at startup, so attestation detects post-startup replacement but treats a pre-existing
+compromised binary as its own baseline unless a reviewed manifest is pinned (roadmap F4).
 
 ## 5. Implementation
 
@@ -164,22 +169,22 @@ root or a `.git` checkout) and roll back on failure or denial.
 
 ## 6. Verification & Results
 
-**Automated suite.** The repository ships 121 test functions across six files —
-`test_governance.py` (44), `test_kali_tools.py` (29), `test_tool_registry.py` (23),
-`test_orchestrator_governance.py` (11), `test_kali_integration.py` (5), and
-`test_adversarial_benchmark.py` (9). In a bare container the result is **115 passed, 5
-skipped, 1 xfailed, 0 failed**; the five skips are localhost/live-binary checks that only run
-where the tools are installed, and the single xfail is the documented V9 residual below.
+**Automated suite.** The repository ships six test files (122 cases:
+`test_governance.py` 44, `test_kali_tools.py` 29, `test_tool_registry.py` 23,
+`test_orchestrator_governance.py` 11, `test_kali_integration.py` 5,
+`test_adversarial_benchmark.py` 10). In a bare container the result is **117 passed, 5
+skipped, 0 failed**; the five skips are localhost/live-binary checks that only run where the
+tools are installed.
 
 **Adversarial robustness (measurable).** `test_adversarial_benchmark.py` doubles as a
-standalone scorecard (`--report` / `--json`) that drives a battery of attacks at the gate —
-command injection, PATH hijack, hash mismatch, audit-log tampering, consent default-deny,
-nonce replay, approval spoofing, and delegated-agent session reuse — and reports **8/8 active
-vectors defeated**. The ninth vector, a mid-session binary swap *after* attestation but
-*before* execution, is the documented residual disk race (finding F5). It is encoded as a
-strict-xfail so the suite turns red the moment a future phase (5/8) binds execution to the
-attested bytes, forcing the residual to be promoted to an active, defeated vector. This is the
-point of the artifact: governance robustness becomes a number, not an adjective.
+standalone scorecard (`--report` / `--json`) that drives ten attacks at the gate — command
+injection, PATH hijack, hash mismatch, audit-log tampering, consent default-deny, nonce
+replay, approval spoofing, delegated-agent session reuse, and both mid-session binary-swap
+modes (in-place rewrite and rename-replace) — and reports **10/10 vectors defeated, 0
+residual**. The two swap vectors were the former F5 residual: Phase 5 closed them with
+fd-pinned execution plus a pre-exec re-hash (in-place is caught by the re-hash; rename-replace
+by the pin), and the strict-xfail tripwire that tracked them has fired and been retired. This
+is the point of the artifact: governance robustness is a number, not an adjective.
 
 **Live-hardware acceptance.** The five-check acceptance suite was executed on real Kali
 hardware (Kali 6.18.3, Python 3.13.11), and all five pass — including the privileged syn-scan

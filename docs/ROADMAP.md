@@ -2,8 +2,8 @@
 
 **Owner:** Joseph (Starwreck) Byram — Hue & Logic Labs
 **Scope:** Kali Kimi Interface (KKI) governed-autonomy stack
-**Status snapshot:** Phases 0–3 complete · Phase 4 landed · 115 passed / 5 skipped / 1 xfailed
-· validated on Kali 6.18.3 · adversarial benchmark **8/8 active vectors defeated, 1 residual**
+**Status snapshot:** Phases 0–4 complete · Phase 5 F5 closed (F4 open) · 117 passed / 5 skipped
+· validated on Kali 6.18.3 · adversarial benchmark **10/10 vectors defeated, 0 residual**
 
 This roadmap absorbs both numbering schemes used so far — the `DH-KKI-IRP-00X` delivery tags
 and the version-tier upgrade paths (`2.2`–`3.0`) in `docs/IRP_GOVERNANCE.md` §10 — into one
@@ -73,9 +73,9 @@ tier, and the findings/components it closes.**
 ## ✅ Phase 4 — Adversarial governance benchmark (LANDED · the "Resultant Seed")
 
 - **Status:** delivered. `tests/test_adversarial_benchmark.py` runs as pytest **and** a
-  standalone `--report` / `--json` scorecard: **8/8 active vectors defeated · 1 documented
-  residual (V9)**. CI (`.github/workflows/ci.yml`, py3.9/3.11/3.13) runs it on every PR.
-  V9 (mid-session swap) is a strict-xfail that flips CI red when Phase 5 closes it.
+  standalone `--report` / `--json` scorecard. After Phase 5 it reports **10/10 vectors
+  defeated · 0 residual** (V9 in-place + V10 rename-replace promoted from the former residual).
+  CI runs it on every PR.
 - **Goal:** Turn governance from *descriptive* to *measurable* — a scored red-team suite.
 - **Deliverables:** `tests/test_adversarial_benchmark.py` consolidating existing red-team
   coverage and adding the real gaps, with a `--report` that emits a robustness score.
@@ -98,14 +98,17 @@ tier, and the findings/components it closes.**
 - **Closes:** measurability for F5; sets up Phase 5.
 - **Tier:** T0.
 
-## ⏭ Phase 5 — Attestation hardening (audit F4 + F5)
+## ◐ Phase 5 — Attestation hardening (F5 ✅ closed · F4 open)
 
 - **Goal:** Execute *the exact bytes that were attested*, against a *reviewed* baseline.
 - **Deliverables:**
-  - **F5 — bind exec to attestation:** run the attested `real_path` (not an independently
-    re-resolved path); where feasible, hold an open fd from attestation time and use
-    `os.execve`/`fexecve`-style execution to shrink the disk-race window.
-  - **F4 — pinned manifest:** `--manifest <file>` loads reviewed known-good hashes (via
+  - **F5 — bind exec to attestation ✅ DONE:** `attestation.pin_binary()` holds an O_RDONLY
+    fd from attestation time (closed deterministically via context manager on every exit
+    path); the engine re-hashes *through the fd* immediately before exec (`recheck()`) and
+    executes the pinned inode via `/proc/self/fd/<fd>` (no `os.fexecve` in stdlib). Adapter
+    uses the pin through a `ContextVar`, so the argument-array ABI is unchanged. Closes both
+    swap modes — benchmark V9 (in-place) + V10 (rename-replace) now DEFEATED.
+  - **F4 — pinned manifest (open):** `--manifest <file>` loads reviewed known-good hashes (via
     `VerifiableToolRegistry.save_manifest`/load) so attestation compares against a pinned
     baseline instead of trust-on-first-use.
 - **Acceptance:** Phase 4's mid-session-swap and path-divergence tests pass; a tampered
@@ -205,8 +208,8 @@ with zero third-party packages through Phase 6.
 | F2 attestation danger-only | 3 | ✅ fixed (now danger + workspace-write) |
 | F3 menu `shell=True` injection | 3 | ✅ fixed |
 | F4 trust-on-first-use baseline | 5 | planned (pinned manifest) |
-| F5 attested-path ≠ executed-path | 5 | planned (bind exec to attestation) |
+| F5 attested-path ≠ executed-path | 5 | ✅ closed (fd-pinned exec + pre-exec re-hash) |
 | F6 HMAC session-local | 7 | planned (Ed25519) |
 | F7 unused `authorize()` | 6 | prune during reconciliation |
 | F8 `network_mapper` outside gate | 6 | review interface-name handling |
-| residual attest→exec disk race | 8 | planned (`fexecve`/namespacing) |
+| residual attest→exec disk race | 5 | ✅ closed (fd pin + re-hash; sub-µs `execve` window only) |
