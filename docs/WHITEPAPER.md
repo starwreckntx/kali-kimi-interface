@@ -164,11 +164,22 @@ root or a `.git` checkout) and roll back on failure or denial.
 
 ## 6. Verification & Results
 
-**Automated suite.** The repository ships 111 test functions across five files —
-`test_governance.py` (43), `test_kali_tools.py` (29), `test_tool_registry.py` (23),
-`test_orchestrator_governance.py` (11), and `test_kali_integration.py` (5). In a bare
-container the result is **106 passed, 5 skipped, 0 failed**; the five skips are localhost and
-live-binary integration checks that only run where the tools are installed.
+**Automated suite.** The repository ships 121 test functions across six files —
+`test_governance.py` (44), `test_kali_tools.py` (29), `test_tool_registry.py` (23),
+`test_orchestrator_governance.py` (11), `test_kali_integration.py` (5), and
+`test_adversarial_benchmark.py` (9). In a bare container the result is **115 passed, 5
+skipped, 1 xfailed, 0 failed**; the five skips are localhost/live-binary checks that only run
+where the tools are installed, and the single xfail is the documented V9 residual below.
+
+**Adversarial robustness (measurable).** `test_adversarial_benchmark.py` doubles as a
+standalone scorecard (`--report` / `--json`) that drives a battery of attacks at the gate —
+command injection, PATH hijack, hash mismatch, audit-log tampering, consent default-deny,
+nonce replay, approval spoofing, and delegated-agent session reuse — and reports **8/8 active
+vectors defeated**. The ninth vector, a mid-session binary swap *after* attestation but
+*before* execution, is the documented residual disk race (finding F5). It is encoded as a
+strict-xfail so the suite turns red the moment a future phase (5/8) binds execution to the
+attested bytes, forcing the residual to be promoted to an active, defeated vector. This is the
+point of the artifact: governance robustness becomes a number, not an adjective.
 
 **Live-hardware acceptance.** The five-check acceptance suite was executed on real Kali
 hardware (Kali 6.18.3, Python 3.13.11), and all five pass — including the privileged syn-scan

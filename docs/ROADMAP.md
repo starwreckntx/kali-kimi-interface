@@ -2,7 +2,8 @@
 
 **Owner:** Joseph (Starwreck) Byram — Hue & Logic Labs
 **Scope:** Kali Kimi Interface (KKI) governed-autonomy stack
-**Status snapshot:** Phases 0–3 complete · 107 passed / 5 skipped · validated on Kali 6.18.3
+**Status snapshot:** Phases 0–3 complete · Phase 4 landed · 115 passed / 5 skipped / 1 xfailed
+· validated on Kali 6.18.3 · adversarial benchmark **8/8 active vectors defeated, 1 residual**
 
 This roadmap absorbs both numbering schemes used so far — the `DH-KKI-IRP-00X` delivery tags
 and the version-tier upgrade paths (`2.2`–`3.0`) in `docs/IRP_GOVERNANCE.md` §10 — into one
@@ -69,8 +70,12 @@ tier, and the findings/components it closes.**
 
 ---
 
-## ⏭ Phase 4 — Adversarial governance benchmark (NEXT · the "Resultant Seed")
+## ✅ Phase 4 — Adversarial governance benchmark (LANDED · the "Resultant Seed")
 
+- **Status:** delivered. `tests/test_adversarial_benchmark.py` runs as pytest **and** a
+  standalone `--report` / `--json` scorecard: **8/8 active vectors defeated · 1 documented
+  residual (V9)**. CI (`.github/workflows/ci.yml`, py3.9/3.11/3.13) runs it on every PR.
+  V9 (mid-session swap) is a strict-xfail that flips CI red when Phase 5 closes it.
 - **Goal:** Turn governance from *descriptive* to *measurable* — a scored red-team suite.
 - **Deliverables:** `tests/test_adversarial_benchmark.py` consolidating existing red-team
   coverage and adding the real gaps, with a `--report` that emits a robustness score.
