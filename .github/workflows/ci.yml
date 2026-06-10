@@ -6,7 +6,11 @@ name: CI
 # the tool is absent, so a stock runner reports 107 passed / 5 skipped, deterministically.
 
 on:
+  # Run on direct pushes to main, and on every pull request. Feature branches with an open
+  # PR are covered by the pull_request event, so this avoids the double run (push +
+  # pull_request) that fires when both triggers are unscoped.
   push:
+    branches: [main]
   pull_request:
 
 # Cancel superseded runs on the same ref to save minutes.
