@@ -64,12 +64,13 @@ def test_tshark_allowlist_blocks_docker0():
 
 # helpers -----------------------------------------------------------------------------------
 def _deny_gate() -> ConsentGate:
-    # No response from the operator -> default-deny.
-    return ConsentGate(prompt_fn=lambda req, timeout: None)
+    # No response from the operator -> default-deny. PromptFn takes a single arg (req).
+    return ConsentGate(prompt_fn=lambda req: None)
 
 
 def _approve_gate() -> ConsentGate:
-    return ConsentGate(prompt_fn=lambda req, timeout: f"APPROVE {req.nonce}")
+    # PromptFn signature is Callable[[ConsentRequest], Optional[str]] — one argument.
+    return ConsentGate(prompt_fn=lambda req: f"APPROVE {req.nonce}")
 
 
 def _governed(consent: ConsentGate):
