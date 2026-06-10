@@ -33,13 +33,17 @@ The part I'm proudest of: on the first live run on Kali hardware, a test "failed
 governed scan was denied on consent timeout, so it never ran. That wasn't a bug. That was the
 default-deny holding under real conditions. Exactly what you want.
 
+Then I attacked my own cage. An adversarial review of the stack turned up two gaps — binary
+attestation wasn't enforced for tools that write to disk, and a legacy menu still built a
+shell string — and I closed both before shipping. Finding your own holes is the job.
+
 Verified on Kali 6.18.3: attestation matches sha256sum /usr/bin/nmap, rate/interface limits
 reject bad calls before a process spawns, consent fails closed, and the audit chain catches a
-single-byte tamper at the exact entry. 106 automated tests, 0 failures.
+single-byte tamper at the exact entry. 107 automated tests, 0 failures.
 
 Stated plainly because security earns trust by being honest about its edges: audit signing is
-session-local today (asymmetric keys are the upgrade path), no kernel sandbox yet, multi-agent
-is roadmap.
+session-local today (asymmetric keys are the upgrade path), the hash baseline is
+trust-on-first-use, no kernel sandbox yet, multi-agent is roadmap.
 
 Understand every layer. Control every variable. Build the failsafe yourself.
 
@@ -95,7 +99,7 @@ Verified on live Kali 6.18.3:
 • rate/interface caps reject before a process spawns
 • consent fails closed
 • audit catches a 1-byte tamper
-106 tests, 0 failures.
+107 tests, 0 failures.
 
 And the whole thing is stdlib-only.
 
@@ -121,5 +125,5 @@ per-invocation SHA-256 attestation, an operator `APPROVE <nonce>`, and an append
 tamper-evident audit entry. Default-deny throughout.
 
 Verified on Kali 6.18.3: 5/5 live-hardware acceptance checks pass (incl. privileged
-syn-scan), 106 automated tests, 0 failures. See `docs/WHITEPAPER.md` and
+syn-scan), 107 automated tests, 0 failures. See `docs/WHITEPAPER.md` and
 `docs/IRP_GOVERNANCE.md`.

@@ -62,17 +62,28 @@ tamper in the log got caught at the exact entry.
 
 That's the whole philosophy in one screenshot: when in doubt, the machine does nothing.
 
+## Then I audited the cage I built
+
+Building the failsafe isn't the end — you have to attack it. So I ran an adversarial review of
+my own stack before it shipped, and I found two gaps. First, binary attestation was being
+hard-enforced only for the most dangerous tools; tools that *write* to disk could slip through
+on an unverified binary. Second, the legacy interactive menu still built a shell command
+string — a classic injection seam, even if only a human could reach it. I closed both: state-
+mutating tools now require a verified binary too, and the menu runs argument arrays with no
+shell. I also caught myself overstating one guarantee in my own docs and corrected it. Finding
+your own holes and writing them down is the job.
+
 ## What's proven, and what I won't pretend
 
 On live Kali (6.18.3), all five acceptance checks pass — attestation matches
 `sha256sum /usr/bin/nmap`, the rate ceiling and interface allowlist reject bad calls before a
 process even spawns, consent fails closed, and the audit chain catches tampering. The full
-automated suite is 106 passing tests.
+automated suite is 107 passing tests.
 
 And the limits, stated plainly because pretending otherwise is how people get hurt: the audit
-signing is session-local today (asymmetric keys are the upgrade path), there's no kernel
-sandbox yet, and multi-agent coordination is still on the roadmap. Real security work earns
-trust by being honest about its edges.
+signing is session-local today (asymmetric keys are the upgrade path), the hash baseline is
+trust-on-first-use, there's no kernel sandbox yet, and multi-agent coordination is still on
+the roadmap. Real security work earns trust by being honest about its edges.
 
 ## Why this matters beyond my lab
 
