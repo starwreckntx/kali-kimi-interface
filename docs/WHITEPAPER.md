@@ -110,8 +110,14 @@ Operationally, `GovernedExecutor._gate()` runs every proposed call through this 
 6. **Audit** — every decision, denial, and execution is appended to the hash chain.
 
 Because attestation is computed once and the same attestation flows from the consent prompt
-into execution, the operator approves *the specific binary hash that will run* — closing the
-time-of-check/time-of-use window.
+into execution, the operator approves *the specific binary hash the gate computed* — closing
+the **consent→execution swap** window (execution never re-attests to a different result). One
+residual race remains and is stated honestly: between hashing the binary and spawning the
+process, a file replaced on disk would execute unverified. That attest→exec disk race is only
+fully closed by fd-pinned execution (`fexecve`) or namespacing — see §8. The hash baseline is
+also trust-on-first-use: it is captured when the verifiable registry is built at startup, so
+attestation detects post-startup replacement but treats a pre-existing compromised binary as
+its own baseline unless a reviewed manifest is pinned.
 
 ## 5. Implementation
 
@@ -190,7 +196,7 @@ working — not a defect — and it is the strongest possible evidence that the 
 | Guarantee | Enforcement | Not bypassable by |
 |---|---|---|
 | No command injection | positive allowlist + `DANGEROUS_CHARS` + argument arrays | prompt injection, target echo |
-| No shell interpretation | `subprocess.run(args, shell=False)` everywhere | metacharacters in any parameter |
+| No shell interpretation | argument arrays (`shell=False`) on the governed execution path (L2 adapter + `GovernedExecutor`) | metacharacters in any parameter reaching the agent path |
 | Bounded resources | rate limit + timeout + truncation + round/depth caps | runaway loops, context flooding |
 | Tool integrity | per-invocation SHA-256 + realpath containment | PATH hijack, symlink, binary swap |
 | Operator sovereignty | consent nonce + default-deny | automated override, timed bypass |
@@ -210,6 +216,14 @@ Honesty about what the stdlib tier does *not* solve is a design principle, not a
   guard the boundary. *Upgrade:* native forced tool-use APIs.
 - **Multi-agent coordination is roadmap.** The `preview()` / `execute()` separation exists;
   distributed agent negotiation is not implemented.
+- **Attestation is enforced only for `danger-full-access`.** A `workspace-write` or
+  `read-only` tool whose attestation fails (untrusted path or hash mismatch) is logged but
+  not blocked. Hardening enforcement to `workspace-write` is recommended follow-up.
+- **The interactive menu is outside the governed boundary.** `kali_start_menu.py` is a
+  human-only convenience front-end that runs operator-typed arguments via a shell
+  (`shell=True`); it is not part of the agent execution path and inherits the operator's own
+  privileges. Every guarantee in this paper applies to the `GovernedExecutor` path. Hardening
+  the menu to argument arrays is recommended follow-up.
 
 ## 9. Methodology
 

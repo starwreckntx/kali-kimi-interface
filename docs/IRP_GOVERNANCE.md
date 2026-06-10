@@ -508,7 +508,7 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 | Guarantee | Enforcement | Not bypassable by |
 |---|---|---|
 | No command injection | positive allowlist + `DANGEROUS_CHARS` blacklist + argument arrays | prompt injection, target echo |
-| No shell interpretation | `subprocess.run(args, shell=False)` everywhere | metacharacters in any parameter |
+| No shell interpretation | argument arrays (`shell=False`) on the governed execution path (L2 adapter + `GovernedExecutor`) | metacharacters in any parameter reaching the agent path |
 | Bounded resources | rate limit + timeout + output truncation | runaway loops, context flooding |
 | Schema-checked inputs | JSON Schema per `ToolSpec` | malformed-but-typed calls |
 | Permission awareness | policy-as-code with `danger-full-access` gate | model reasoning / social engineering |
@@ -522,6 +522,9 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 |---|---|---|---|
 | HMAC key is ephemeral / not persisted | Medium | file read-back verifies the keyless chain; in-process verify checks HMAC | Ed25519 asymmetric signing + HSM |
 | No Linux namespace sandboxing | Medium | process runs as orchestrator UID | `unshare()` / `setcap()` capability dropping |
+| attest→exec disk race + trust-on-first-use baseline | Medium | hash compared to a startup baseline; closes consent→exec swap but not the hash→spawn window | pinned reviewed manifest + fd-pinned exec (`fexecve`) / namespacing |
+| Attestation enforced for `danger-full-access` only | Low | `workspace-write` / `read-only` attestation failures are logged, not blocked | extend hard enforcement to `workspace-write` |
+| Interactive menu uses a shell (`kali_start_menu.py`) | Low | human-only front-end, outside the governed agent path, runs at operator privilege | rewrite to argument arrays |
 | No grammar-constrained model output | Low | defensive JSON extraction + schema validation | native forced tool-use API |
 | masscan/tshark filter validation is allowlist-level | Low | interface allowlist + duration/rate bounds + metachar rejection | full BPF/eBPF validation |
 | Snap-back scoped to `<work_dir>/workspace` | Low | repo-root / `.git` guard; most output is stdout-captured | filesystem (ZFS/Btrfs) snapshots |
