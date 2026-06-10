@@ -73,6 +73,7 @@ the audit chain.
 | 3.1 Per-invocation attestation | **Implemented** | `attestation.attest_binary`: `realpath` + trusted-dir containment + fresh SHA-256, optional expected-hash compare. |
 | 3.1 PATH/symlink hijack detection | **Implemented** | `os.path.realpath` defeats symlink redirection; `commonpath` containment defeats `/usr/bin-evil` prefix tricks. |
 | 3.1 Capability-namespace / `kkid` daemon | **Roadmap** | `unshare`/`setcap`/IPC daemon is OS-level work outside a stdlib module; the path-attestation core is the testable first step. |
+| 3.1 masscan/tshark under L2 discipline | **Implemented** | `KaliToolAdapter.masscan_scan` (rate ceiling `MAX_MASSCAN_RATE`) and `tshark_capture` (interface allowlist + bounded duration) replace the orchestrator's direct-subprocess wrappers; both inherit `_validate_target`/`_check_rate_limit`/`_execute_tool` and are registered harness tools. |
 | 3.2 Strict target allowlist | **Implemented** | `validation.validate_target` uses `ipaddress` (robust IPv4/IPv6/CIDR) + RFC 1123 hostname regex. |
 | 3.2 Enumerated safe flags | **Implemented** | `SAFE_FLAGS[tool]` + `validate_flags`; tools without an entry reject all flags (fail closed). Directly closes the `{flags}` sharp edge noted in `CLAUDE.md`. |
 | 3.4 Positive validation | **Implemented (additive)** | Allowlist added as the primary gate; the existing `DANGEROUS_CHARS` blacklist is **kept** as defense-in-depth (the spec said "destroy" it — we deliberately did not, to avoid regressing injection tests and to keep two independent barriers). |
@@ -94,8 +95,8 @@ the audit chain.
 
 | Task | Status | Notes |
 |---|---|---|
-| 4.1 Non-repudiable audit trail | **Implemented** | Decision/execution/integrity streams in one hash-chained, tamper-evident log. |
-| 4.2 Continuous red-team | **Partial** | `tests/test_governance.py` covers injection, homoglyph, PATH-hijack, hash-mismatch, and the governance regression; continuous fuzzing is roadmap. |
+| 4.1 Non-repudiable audit trail | **Implemented** | Decision/execution/integrity streams in one hash-chained, tamper-evident log. `AuditLog.verify_file(path)` reads a saved chain back and detects payload tampering / chain breaks at the exact entry (keyless SHA-256 chain; inject the key to also re-check HMAC). |
+| 4.2 Continuous red-team | **Partial** | `tests/test_governance.py` + `tests/test_orchestrator_governance.py` cover injection, homoglyph, PATH-hijack, hash-mismatch, read-back tamper detection, L2 rate/interface caps, snap-back, and the governance regression; continuous fuzzing is roadmap. |
 | 4.3 Boundary-consent pending log | **Implemented** | `ConsentGate.boundary_report()` + `GovernedExecutor.session_report()` capture unauthorized/pending actions at session close. |
 
 ## Deliberately *not* done (and why)
@@ -146,10 +147,15 @@ tool call through a `GovernedExecutor` by default. The action loop's dispatch
 masscan/tshark wrappers through `GovernedExecutor.authorize` (gate-only), so neither path
 can bypass policy + attestation + consent. Each session writes a Mnemosyne mirror —
 `<work_dir>/audit/<session-id>.chain` (the signed chain) and `.pending` (boundary-consent)
-— alongside the existing `results/<session-id>.json`. Governance is on by default; pass
-`--ungoverned` to bypass (test/diagnostic only) and `--network-scope CIDR` to enforce the
-scope gate. In a non-interactive run the default consent gate times out to **DENY**, so a
-`danger-full-access` tool fails closed unless an operator is present to approve it.
+— alongside the existing `results/<session-id>.json`. Governance is **always on from the
+CLI** — there is no `--ungoverned` flag (the `governed` constructor parameter remains for
+in-process test injection only); `--network-scope CIDR` enforces the scope gate. For
+danger/workspace-write tools the orchestrator takes a scoped snap-back of
+`<work_dir>/workspace` (never the repo/source tree) and rolls it back on failure or denial.
+The operator consent prompt is bound to the attested binary SHA-256, and the same single
+attestation flows to execution, so there is no consent→exec swap window. In a
+non-interactive run the consent gate times out to **DENY**, so a `danger-full-access` tool
+fails closed unless an operator is present to approve it.
 
 ## Verification
 

@@ -176,10 +176,14 @@ class GovernedExecutor:
         consent_dict: Optional[Dict[str, Any]] = None
         if decision.authorization == Authorization.REQUIRES_CONSENT:
             target = str(params.get("target") or params.get("url") or params.get("host") or "?")
+            # Bind the attested binary hash into the operator prompt. The SAME attestation
+            # object is used for execution (execute() does not re-attest), so the operator
+            # approves the exact hash that runs — closing the consent->exec TOCTOU window.
+            attested = (att.sha256 if att and att.sha256 else "unattested")
             cd: ConsentDecision = self.consent.request(
                 tool=self._binary_name(tool_name), target=target,
                 blast_radius=decision.blast_radius.value,
-                est_impact=f"{tool_name} against {target}",
+                est_impact=f"{tool_name} against {target} [sha256:{attested[:16]}]",
             )
             consent_dict = cd.to_dict()
             seqs.append(self.audit.log_decision({"event": "consent", **consent_dict}).seq)

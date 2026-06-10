@@ -244,7 +244,65 @@ class SecurityToolExecutor:
             required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
             handler=self._handle_quick_recon
         )
-    
+
+        # masscan / tshark — now first-class harness tools (previously direct-subprocess
+        # wrappers in the orchestrator). Registered under the names Kimi already emits.
+        self.tools['masscan_quick'] = ToolSpec(
+            name='masscan_quick',
+            description='High-speed port scan via masscan (rate-capped)',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'Target IP/CIDR'},
+                    'ports': {'type': 'string', 'description': 'Port range e.g. 1-65535'},
+                    'rate': {'type': 'integer', 'minimum': 1, 'maximum': 100000,
+                             'description': 'Packets/sec (hard ceiling 100000)'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600},
+                },
+                'required': ['target'],
+                'additionalProperties': False,
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_masscan_quick,
+        )
+
+        self.tools['tshark_capture'] = ToolSpec(
+            name='tshark_capture',
+            description='Bounded packet capture via tshark (interface allowlist + duration)',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'interface': {'type': 'string',
+                                  'enum': ['eth0', 'eth1', 'wlan0', 'wlan1', 'lo', 'any']},
+                    'filter': {'type': 'string', 'description': 'BPF capture filter'},
+                    'duration': {'type': 'integer', 'minimum': 1, 'maximum': 300},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600},
+                },
+                'required': [],
+                'additionalProperties': False,
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_tshark_capture,
+        )
+
+    def _handle_masscan_quick(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        """Handle masscan execution under L2 discipline."""
+        return self.adapter.masscan_scan(
+            target=input_data['target'],
+            ports=input_data.get('ports', '1-1000'),
+            rate=input_data.get('rate', 1000),
+            timeout=input_data.get('timeout'),
+        )
+
+    def _handle_tshark_capture(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        """Handle tshark capture under L2 discipline."""
+        return self.adapter.tshark_capture(
+            interface=input_data.get('interface', 'any'),
+            filter_expr=input_data.get('filter', ''),
+            duration=input_data.get('duration', 10),
+            timeout=input_data.get('timeout'),
+        )
+
     def _handle_nmap_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
         """Handle nmap scan execution."""
         return self.adapter.nmap_scan(

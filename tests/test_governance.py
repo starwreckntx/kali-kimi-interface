@@ -254,6 +254,38 @@ class TestAuditLog:
             assert os.path.exists(path)
 
 
+class TestAuditChainVerifyFile:
+    """Read-back tamper detection on a persisted chain (Task 4)."""
+
+    def _write_chain(self, d):
+        log = AuditLog(session_id="verify-test")
+        for i in range(5):
+            log.append("decision", {"seq_marker": i, "note": f"entry-{i}"})
+        return log.save(os.path.join(d, "chain.json"))
+
+    def test_verify_file_valid(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write_chain(d)
+            ok, bad, reason = AuditLog.verify_file(path)
+            assert ok is True and bad is None and reason == "ok"
+
+    def test_verify_file_detects_single_entry_tamper(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write_chain(d)
+            with open(path) as f:
+                data = json.load(f)
+            # Flip a payload value in entry seq 2 — must break that entry's hash.
+            data["entries"][2]["payload"]["note"] = "TAMPERED"
+            with open(path, "w") as f:
+                json.dump(data, f)
+            ok, bad, reason = AuditLog.verify_file(path)
+            assert ok is False
+            assert bad == 2
+            assert reason in ("hash_mismatch", "chain_break")
+
+
 # --------------------------------------------------------------------------- policy
 
 class TestPolicyEngine:

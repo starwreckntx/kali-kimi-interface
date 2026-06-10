@@ -16,6 +16,7 @@ Architecture:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -318,13 +319,10 @@ OR when done:
 
 Start your assessment. Return your FIRST tool call as JSON now."""
 
-    # Non-harness wrappers, keyed by tool name. These run subprocess.run directly, so when
-    # governed they MUST pass through the consent gate (via authorize) before running.
-    _LOCAL_WRAPPERS = ("masscan_quick", "tshark_capture")
-
     def _execute_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool call. When governed, every path — including the local
-        masscan/tshark wrappers — passes through GovernedExecutor's gate first."""
+        """Execute a tool call. masscan/tshark are now first-class harness tools, so every
+        tool — with no exceptions — goes through the executor (and, when governed, the full
+        governance gate). There is no direct-subprocess wrapper path anymore."""
 
         tool_name = tool_call.get("tool", "")
         params = tool_call.get("params", {})
@@ -335,31 +333,24 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         if self.governed:
             return self._governed_dispatch(tool_name, params)
 
-        # Ungoverned path (test isolation only) — original behavior.
-        if tool_name == "masscan_quick":
-            return self._run_masscan(params)
-        if tool_name == "tshark_capture":
-            return self._run_tshark(params)
+        # Ungoverned path (test isolation only).
         try:
             return self.executor.execute(tool_name, params)
         except Exception as e:
             return {"error": str(e), "tool": tool_name, "success": False}
 
     def _governed_dispatch(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Run a tool through the governance gate and normalize the GovernedResult to the
-        dict shape the assessment loop already expects."""
-        if tool_name in self._LOCAL_WRAPPERS:
-            # Not registered in the base executor: gate-only, then run the wrapper if cleared.
-            gr = self.executor.authorize(tool_name, params, permission="danger-full-access")
-            if not gr.allowed:
-                return self._deny_dict(tool_name, gr)
-            return self._run_masscan(params) if tool_name == "masscan_quick" else self._run_tshark(params)
-
+        """Run a tool through the governance gate (with optional snap-back) and normalize
+        the GovernedResult to the dict shape the assessment loop already expects."""
+        snap = self._snap_before(tool_name)
         gr = self.executor.execute(tool_name, params)
         if gr.allowed:
+            self._snap_after(snap, success=True)
             result = dict(gr.result or {})
             result.setdefault("tool", tool_name)
             return result
+        # Blocked by governance, or executed and failed — roll back any snapshot.
+        self._snap_after(snap, success=False)
         return self._deny_dict(tool_name, gr)
 
     @staticmethod
@@ -375,55 +366,77 @@ Start your assessment. Return your FIRST tool call as JSON now."""
             "governance": gr.to_dict(),
         }
     
-    def _run_masscan(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Wrapper for masscan."""
-        target = params.get("target", "")
-        ports = params.get("ports", "1-1000")
-        rate = params.get("rate", "1000")
-        
-        try:
-            result = subprocess.run(
-                ["masscan", target, "-p", ports, "--rate", rate],
-                capture_output=True, text=True, timeout=120
-            )
-            return {
-                "tool": "masscan",
-                "command": f"masscan {target} -p {ports} --rate {rate}",
-                "returncode": result.returncode,
-                "stdout": result.stdout[:50000],
-                "stderr": result.stderr[:50000],
-                "parsed_output": {"success": result.returncode == 0, "raw_preview": result.stdout[:5000]},
-                "duration_ms": 0,
-                "timestamp": datetime.now().isoformat()
-            }
-        except Exception as e:
-            return {"error": str(e), "tool": "masscan", "success": False}
-    
-    def _run_tshark(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Wrapper for tshark."""
-        interface = params.get("interface", "eth0")
-        duration = params.get("duration", 10)
-        bpf_filter = params.get("filter", "")
-        
-        try:
-            cmd = ["tshark", "-i", interface, "-a", f"duration:{duration}", "-c", "100"]
-            if bpf_filter:
-                cmd.extend(["-f", bpf_filter])
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=int(duration) + 10)
-            return {
-                "tool": "tshark",
-                "command": " ".join(cmd),
-                "returncode": result.returncode,
-                "stdout": result.stdout[:50000],
-                "stderr": result.stderr[:50000],
-                "parsed_output": {"success": result.returncode == 0, "packet_count": len(result.stdout.strip().split('\n'))},
-                "duration_ms": int(duration * 1000),
-                "timestamp": datetime.now().isoformat()
-            }
-        except Exception as e:
-            return {"error": str(e), "tool": "tshark", "success": False}
-    
+    # --- snap-back recovery (MOD-045) ------------------------------------------------
+    # Capture a reversible snapshot of the artifacts workspace before a governed tool
+    # runs, so a failure or denial can roll back partial mutations. Deliberately scoped to
+    # <work_dir>/workspace and NEVER the repo/source tree: snapshotting work_dir itself
+    # (which defaults to the repo root) would copy the whole checkout incl. .git on every
+    # call. In the current toolset most output is stdout-captured, so this is a safety net
+    # for file-writing tools rather than a hot path.
+
+    def _workspace_dir(self) -> Path:
+        return Path(self.work_dir) / "workspace"
+
+    def _create_snap(self, target_dir: Path) -> Optional[str]:
+        """Copy target_dir to a sibling .snap. Refuses unsafe targets; returns snap path."""
+        rp = target_dir.resolve()
+        # Guard: never snapshot the repo root or any directory holding a VCS checkout.
+        if rp == Path(self.work_dir).resolve() or (rp / ".git").exists():
+            return None
+        if not rp.exists():
+            return None
+        snap_path = f"{rp}.snap"
+        if os.path.exists(snap_path):
+            shutil.rmtree(snap_path)
+        shutil.copytree(rp, snap_path)
+        return snap_path
+
+    def _restore_snap(self, target_dir: Path, snap_path: str) -> None:
+        rp = target_dir.resolve()
+        if rp.exists():
+            shutil.rmtree(rp)
+        os.rename(snap_path, str(rp))
+
+    def _delete_snap(self, snap_path: str) -> None:
+        if snap_path and os.path.exists(snap_path):
+            shutil.rmtree(snap_path)
+
+    @staticmethod
+    def _hash_snap(snap_path: str) -> str:
+        h = hashlib.sha256()
+        h.update(snap_path.encode())
+        mtime = os.path.getmtime(snap_path) if snap_path and os.path.exists(snap_path) else 0
+        h.update(str(mtime).encode())
+        return h.hexdigest()
+
+    def _snap_before(self, tool_name: str) -> Optional[str]:
+        """Snapshot the workspace for danger/workspace-write tools, after the consent gate
+        has been reached but before execution. Returns the snap path, or None."""
+        if not self.governed:
+            return None
+        permission = self.executor._permission_for(tool_name)
+        if permission not in ("danger-full-access", "workspace-write"):
+            return None
+        ws = self._workspace_dir()
+        snap = self._create_snap(ws)
+        if snap:
+            self.executor.audit.log_integrity({
+                "event": "snap_created", "tool": tool_name,
+                "workspace": str(ws), "snap_hash": self._hash_snap(snap),
+            })
+        return snap
+
+    def _snap_after(self, snap_path: Optional[str], success: bool) -> None:
+        if not snap_path:
+            return
+        ws = self._workspace_dir()
+        if success:
+            self._delete_snap(snap_path)
+            self.executor.audit.log_integrity({"event": "snap_deleted", "status": "success"})
+        else:
+            self._restore_snap(ws, snap_path)
+            self.executor.audit.log_integrity({"event": "snap_restored", "status": "rolled_back"})
+
     def run_assessment(self, target: str, task: str = "full recon", depth: str = "standard", max_rounds: int = 10) -> Dict[str, Any]:
         """
         Run a full AI-driven assessment.
@@ -566,18 +579,17 @@ def main():
     parser.add_argument("--work-dir", help="Working directory for Kimi (default: repo root)")
     parser.add_argument("--network-scope", action="append",
                         help="Allowed target CIDR for the governance scope gate (repeatable)")
-    parser.add_argument("--ungoverned", action="store_true",
-                        help="DANGER: bypass the governance layer (no policy/consent/audit). Not recommended.")
     parser.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
 
+    # Governance is always on from the CLI — there is no --ungoverned bypass flag. The
+    # `governed` constructor parameter remains for in-process test injection only.
     try:
         orchestrator = KaliKimiOrchestrator(
             verbose=args.verbose,
             kimi_cli=args.kimi_cli,
             work_dir=args.work_dir,
-            governed=not args.ungoverned,
             network_scope=args.network_scope,
         )
         result = orchestrator.run_assessment(

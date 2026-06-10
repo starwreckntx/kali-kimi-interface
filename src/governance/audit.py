@@ -121,6 +121,42 @@ class AuditLog:
             prev_hash = entry.entry_hash
         return True, None
 
+    @staticmethod
+    def verify_file(path: str, key: Optional[bytes] = None) -> Tuple[bool, Optional[int], str]:
+        """Read back a saved chain file and verify its integrity.
+
+        Re-walks the SHA-256 hash chain (recomputing each entry_hash from its body and
+        checking prev_hash linkage) — this is keyless and detects any payload tampering or
+        reordering. If ``key`` is supplied, the HMAC tag is also checked. The on-disk format
+        deliberately omits the key, so cross-process HMAC verification requires injecting
+        the same key used to write the chain (see the Ed25519/HSM upgrade path).
+
+        Returns (ok, first_bad_seq, reason). first_bad_seq is None when ok.
+        """
+        with open(path) as f:
+            data = json.load(f)
+        entries = data.get("entries", [])
+        prev_hash = GENESIS_HASH
+        for entry in entries:
+            body = {
+                "seq": entry["seq"],
+                "timestamp": entry["timestamp"],
+                "category": entry["category"],
+                "payload": entry["payload"],
+                "prev_hash": entry["prev_hash"],
+            }
+            recomputed = hashlib.sha256(_canonical(body)).hexdigest()
+            if entry["prev_hash"] != prev_hash:
+                return False, entry["seq"], "chain_break"
+            if recomputed != entry["entry_hash"]:
+                return False, entry["seq"], "hash_mismatch"
+            if key is not None:
+                expected = hmac.new(key, entry["entry_hash"].encode("utf-8"), hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(expected, entry["hmac"]):
+                    return False, entry["seq"], "hmac_mismatch"
+            prev_hash = entry["entry_hash"]
+        return True, None, "ok"
+
     def auditor_state(self) -> Dict[str, Any]:
         """Self-referential state: a hash over every entry hash plus head and count."""
         digest = hashlib.sha256(

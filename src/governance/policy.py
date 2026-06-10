@@ -87,7 +87,7 @@ class PolicyEngine:
         self.tool_to_binary = tool_to_binary or {
             "nmap_scan": "nmap", "masscan_quick": "masscan", "gobuster_scan": "gobuster",
             "dirb_scan": "dirb", "nikto_scan": "nikto", "hydra_scan": "hydra",
-            "sqlmap_scan": "sqlmap", "quick_recon": "nmap",
+            "sqlmap_scan": "sqlmap", "quick_recon": "nmap", "tshark_capture": "tshark",
         }
 
     def evaluate(self, tool_name: str, permission: str, params: Dict[str, Any]) -> PolicyDecision:
