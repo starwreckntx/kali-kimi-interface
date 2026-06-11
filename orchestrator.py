@@ -39,6 +39,7 @@ from governance.engine import GovernedExecutor, GovernedResult
 from governance.policy import PolicyEngine
 from governance.consent import ConsentGate
 from governance.audit import AuditLog
+from governance.crypto import SignatureError
 
 
 # Default working directory is the repository root (this file's directory), so the
@@ -171,6 +172,8 @@ class KaliKimiOrchestrator:
         consent_prompt: Any = None,
         consent_timeout: float = 30.0,
         manifest: Optional[str] = None,
+        pubkey: Optional[str] = None,
+        require_signed: bool = False,
     ):
         self.verbose = verbose
         self.work_dir = str(Path(work_dir).expanduser().resolve()) if work_dir else str(DEFAULT_WORK_DIR)
@@ -180,11 +183,13 @@ class KaliKimiOrchestrator:
         if executor is not None:
             self.executor = executor
         elif governed:
-            # F4: a manifest engages the verifiable root of trust; without one the registry
-            # falls back to trust-on-first-use and the engine logs a high-visibility warning.
+            # F4/F7: a manifest engages the verifiable root of trust; a pubkey demands a valid
+            # Ed25519 signature over it (CRITICAL_HALT on failure). Without a manifest the
+            # registry falls back to TOFU and the engine logs a high-visibility warning.
             self.executor = GovernedExecutor(
                 executor=SecurityToolExecutor(),
-                registry=VerifiableToolRegistry(manifest=manifest),
+                registry=VerifiableToolRegistry(manifest=manifest, pubkey=pubkey,
+                                                require_signed=require_signed),
                 policy=PolicyEngine(network_scope=network_scope),
                 consent=ConsentGate(prompt_fn=consent_prompt, timeout=consent_timeout),
                 audit=AuditLog(),
@@ -586,6 +591,10 @@ def main():
                         help="Allowed target CIDR for the governance scope gate (repeatable)")
     parser.add_argument("--manifest",
                         help="Known-good tool manifest (F4 root of trust); omit to fall back to TOFU")
+    parser.add_argument("--pubkey",
+                        help="Ed25519 public key (hex or file) — require a signed manifest (F7)")
+    parser.add_argument("--require-signed", action="store_true",
+                        help="Refuse danger-tier tools unless the manifest signature verified")
     parser.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -599,6 +608,8 @@ def main():
             work_dir=args.work_dir,
             network_scope=args.network_scope,
             manifest=args.manifest,
+            pubkey=args.pubkey,
+            require_signed=args.require_signed,
         )
         result = orchestrator.run_assessment(
             target=args.target,
@@ -606,6 +617,10 @@ def main():
             depth=args.depth,
             max_rounds=args.max_rounds,
         )
+    except SignatureError as e:
+        # F7 CRITICAL_HALT: a signed root of trust was demanded and could not be proven.
+        print(f"[CRITICAL_HALT] {e}", file=sys.stderr)
+        sys.exit(1)
     except SecurityToolError as e:
         print(f"[!] {e}", file=sys.stderr)
         sys.exit(1)

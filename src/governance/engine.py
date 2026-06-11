@@ -131,6 +131,8 @@ class GovernedExecutor:
             self.audit.log_integrity({
                 "event": "root_of_trust", "mode": "manifest",
                 "manifest_path": getattr(self.registry, "manifest_path", None),
+                "signature": getattr(self.registry, "signature_status", "unsigned"),
+                "require_signed": getattr(self.registry, "require_signed", False),
                 "boot_blocked": blocked,
             })
         else:
@@ -224,6 +226,20 @@ class GovernedExecutor:
             }).seq)
             return (self._blocked(tool_name, decision, None, None,
                                   f"blocked at boot ({boot}): not verified against the manifest root of trust",
+                                  seqs),
+                    decision, None, None, seqs)
+
+        # 1c. F7 signed-execution policy: when require_signed is set, the danger tier may only
+        #     run against a cryptographically VERIFIED manifest root of trust.
+        if (getattr(self.registry, "require_signed", False)
+                and decision.blast_radius == BlastRadius.DANGER
+                and getattr(self.registry, "signature_status", "unsigned") != "verified"):
+            seqs.append(self.audit.log_integrity({
+                "event": "unsigned_blocked", "tool": tool_name,
+                "signature": getattr(self.registry, "signature_status", "unsigned"),
+            }).seq)
+            return (self._blocked(tool_name, decision, None, None,
+                                  "unsigned root of trust: a signed manifest is required for danger-full-access",
                                   seqs),
                     decision, None, None, seqs)
 

@@ -2,8 +2,8 @@
 
 **Owner:** Joseph (Starwreck) Byram — Hue & Logic Labs
 **Scope:** Kali Kimi Interface (KKI) governed-autonomy stack
-**Status snapshot:** Phases 0–5 complete (F4 + F5 closed) · 126 passed / 5 skipped
-· validated on Kali 6.18.3 · adversarial benchmark **11/11 vectors defeated, 0 residual**
+**Status snapshot:** Phases 0–5 complete · Phase 7 Ed25519 landed (FIDO2 open) · 141 passed / 6 skipped
+· validated on Kali 6.18.3 · adversarial benchmark **12/12 vectors defeated, 0 residual**
 
 This roadmap absorbs both numbering schemes used so far — the `DH-KKI-IRP-00X` delivery tags
 and the version-tier upgrade paths (`2.2`–`3.0`) in `docs/IRP_GOVERNANCE.md` §10 — into one
@@ -139,7 +139,13 @@ tier, and the findings/components it closes.**
 
 ---
 
-## 🔭 Phase 7 — Cryptographic non-repudiation (roadmap 2.2 / 2.3)
+## ◐ Phase 7 — Cryptographic root of trust (Ed25519 ✅ · FIDO2 open)
+
+- **Status:** Ed25519 landed. `governance/crypto.py` (pure-Python RFC 8032 + optional PyCA).
+  Detached manifest signatures (`--gen-key`/`--sign-manifest`/`--pubkey`) verified at boot ->
+  CRITICAL_HALT on failure (no TOFU fallback); `--require-signed` gates the danger tier. Audit
+  log gains optional Ed25519 chain-head signing (externally verifiable). Benchmark V12.
+  FIDO2/YubiKey consent transport remains open.
 
 - **Goal:** Cross-session/process audit integrity and stronger consent transport.
 - **Deliverables:** Ed25519 asymmetric audit signing (sign `entry_hash`; `verify_file`
@@ -212,7 +218,7 @@ with zero third-party packages through Phase 6.
 | F3 menu `shell=True` injection | 3 | ✅ fixed |
 | F4 trust-on-first-use baseline | 5 | ✅ closed (manifest root of trust + boot gate) |
 | F5 attested-path ≠ executed-path | 5 | ✅ closed (fd-pinned exec + pre-exec re-hash) |
-| F6 HMAC session-local | 7 | planned (Ed25519) |
+| F6 HMAC session-local | 7 | ✅ closed (optional Ed25519 chain-head signing) |
 | F7 unused `authorize()` | 6 | prune during reconciliation |
 | F8 `network_mapper` outside gate | 6 | review interface-name handling |
 | residual attest→exec disk race | 5 | ✅ closed (fd pin + re-hash; sub-µs `execve` window only) |

@@ -169,19 +169,17 @@ root or a `.git` checkout) and roll back on failure or denial.
 
 ## 6. Verification & Results
 
-**Automated suite.** The repository ships six test files (131 cases:
-`test_governance.py` 47, `test_kali_tools.py` 29, `test_tool_registry.py` 28,
-`test_orchestrator_governance.py` 11, `test_kali_integration.py` 5,
-`test_adversarial_benchmark.py` 11). In a bare container the result is **126 passed, 5
-skipped, 0 failed**; the five skips are localhost/live-binary checks that only run where the
-tools are installed.
+**Automated suite.** The repository ships seven test files; in a bare container the result is
+**141 passed, 6 skipped, 0 failed**. The skips are localhost/live-binary checks that only run
+where the tools are installed, plus a PyCA-interop conformance check that runs only where
+`cryptography` is installed.
 
 **Adversarial robustness (measurable).** `test_adversarial_benchmark.py` doubles as a
-standalone scorecard (`--report` / `--json`) that drives eleven attacks at the gate — command
+standalone scorecard (`--report` / `--json`) that drives twelve attacks at the gate — command
 injection, PATH hijack, hash mismatch, audit-log tampering, consent default-deny, nonce
 replay, approval spoofing, delegated-agent session reuse, both mid-session binary-swap modes
-(in-place rewrite and rename-replace), and a boot-time manifest mismatch — and reports
-**11/11 vectors defeated, 0 residual**. The two swap vectors were the former F5 residual,
+(in-place rewrite and rename-replace), a boot-time manifest mismatch (F4), and a forged
+manifest signature (F7, CRITICAL_HALT) — and reports **12/12 vectors defeated, 0 residual**. The two swap vectors were the former F5 residual,
 closed in Phase 5 by fd-pinned execution plus a pre-exec re-hash; the boot-mismatch vector
 exercises the F4 manifest root of trust. The strict-xfail tripwire that tracked the swap
 residual fired and was retired. This is the point of the artifact: governance robustness is a
@@ -223,10 +221,19 @@ working — not a defect — and it is the strongest possible evidence that the 
 
 Honesty about what the stdlib tier does *not* solve is a design principle, not an afterthought:
 
-- **HMAC signing is session-local.** The HMAC key is ephemeral and not persisted, so
-  cross-session/process non-repudiation requires key management the standard library does not
-  provide cleanly. The keyless hash chain still detects tampering within and across runs.
-  *Upgrade:* Ed25519 asymmetric signing + HSM.
+- **Audit non-repudiation: HMAC by default, Ed25519 optional (F7).** Per-entry HMAC is
+  session-local. An optional Ed25519 `signing_key` signs the chain head once at `save()`
+  (the head commits to every entry), giving externally-verifiable non-repudiation with only
+  the public key. The signing primitive is pure-Python RFC 8032 (zero-dependency core, ~250ms
+  per op — so the audit log is signed at the chain level, not per entry); installing PyCA
+  `cryptography` provides the audited, fast backend through the same API. Hand-rolled crypto is
+  an anti-pattern; the pure path is validated by self-consistency + the deterministic-signature
+  property, and by byte-for-byte PyCA interop where `cryptography` is present. *Upgrade:* HSM /
+  hardware-token-held signing keys.
+- **Manifest root of trust is signed (F7).** The F4 manifest can carry a detached Ed25519
+  signature verified at boot against an operator-supplied public key; a present-but-invalid or
+  required-but-missing signature is a CRITICAL_HALT (no TOFU fallback). The private key signs
+  offline (`--gen-key` / `--sign-manifest`).
 - **No Linux namespace sandboxing.** `subprocess.run(..., shell=False)` plus argument arrays
   is the current execution boundary. *Upgrade:* `unshare` / `setcap` / seccomp.
 - **No grammar-constrained model output.** Defensive JSON extraction and schema validation

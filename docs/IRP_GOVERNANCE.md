@@ -520,7 +520,7 @@ records the attestation reason (expected vs. actual). Investigate before re-runn
 
 | Limitation | Risk | Mitigation | Upgrade path |
 |---|---|---|---|
-| HMAC key is ephemeral / not persisted | Medium | file read-back verifies the keyless chain; in-process verify checks HMAC | Ed25519 asymmetric signing + HSM |
+| Per-entry audit signing is HMAC | Low | optional Ed25519 signs the chain head at save (externally verifiable, F7); per-entry HMAC remains the keyless default | HSM / hardware-held signing key |
 | No Linux namespace sandboxing | Medium | process runs as orchestrator UID | `unshare()` / `setcap()` capability dropping |
 | No manifest ⇒ trust-on-first-use baseline | Low | F4 manifest mode (`--manifest`) is the verifiable root of trust; without one the baseline is TOFU and the engine logs a high-visibility `root_of_trust` warning | supply a reviewed manifest |
 | Sub-µs re-hash→`execve` window | Info | enforced tiers pin the inode by fd and re-hash before exec; `execve` maps the inode atomically | kernel atomic check-and-exec (not in stdlib) |

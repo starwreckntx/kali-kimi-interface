@@ -377,6 +377,23 @@ def v11_boot_manifest_mismatch() -> Tuple[Status, str]:
     return defeated, f"allowed={out.allowed} reason={out.denial_reason!r}"
 
 
+def v12_forged_manifest_signature() -> Tuple[Status, str]:
+    """A signed manifest rewritten by an attacker (who lacks the offline seed) halts at boot (F7)."""
+    from governance import crypto
+    from tool_registry import VerifiableToolRegistry
+    d = tempfile.mkdtemp()
+    mp = os.path.join(d, "m.json")
+    Path(mp).write_text(json.dumps({"fingerprints": {"/usr/bin/x": "ab" * 32}}))
+    seed = crypto.generate_seed()
+    crypto.write_signature(mp, seed)
+    Path(mp).write_text(json.dumps({"fingerprints": {"/usr/bin/x": "00" * 32}}))   # forged, not re-signed
+    try:
+        VerifiableToolRegistry(manifest=mp, pubkey=crypto.public_key(seed).hex())
+        return False, "registry started despite a forged signature"
+    except crypto.SignatureError:
+        return True, "CRITICAL_HALT — signature verification failed, no TOFU fallback"
+
+
 # --------------------------------------------------------------------------- registry
 
 # (id, title, fn, residual?)
@@ -392,6 +409,7 @@ VECTORS: List[Tuple[str, str, Callable[[], Tuple[Status, str]], bool]] = [
     ("V9",  "Mid-session swap (in-place)",      v9_mid_session_swap_in_place, False),
     ("V10", "Mid-session swap (rename-replace)", v10_mid_session_swap_rename, False),
     ("V11", "Boot-time manifest mismatch",      v11_boot_manifest_mismatch,  False),
+    ("V12", "Forged manifest signature",        v12_forged_manifest_signature, False),
 ]
 
 

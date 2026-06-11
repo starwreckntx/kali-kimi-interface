@@ -462,3 +462,49 @@ class TestF4BootGate:
         gov.execute("quick_recon", {"target": "10.0.0.5"})   # warning logged on first gate use
         events = [e.payload.get("event") for e in gov.audit.entries]
         assert "root_of_trust" in events
+
+
+class _SignedPolicyRegistry:
+    """Manifest-mode registry exposing F7 require_signed + signature_status."""
+    manifest_mode = True
+    root_of_trust = "manifest"
+    manifest_path = "<test>"
+
+    def __init__(self, permission, binary_path, require_signed, signature_status):
+        tv = _FakeTV(permission, binary_path)
+        tv.boot_status = "ok"
+        self._tv = tv
+        self.require_signed = require_signed
+        self.signature_status = signature_status
+
+    def get(self, name):
+        return self._tv
+
+    def boot_blocked(self):
+        return {}
+
+
+class TestF7SignedExecution:
+    """F7 — require_signed refuses the danger tier unless the manifest signature verified."""
+
+    def test_require_signed_blocks_unsigned_danger(self):
+        ex = _FakeExecutor("danger-full-access")
+        reg = _SignedPolicyRegistry("danger-full-access", _trusted_binary(),
+                                    require_signed=True, signature_status="unsigned")
+        gov = GovernedExecutor(executor=ex, registry=reg,
+                               consent=ConsentGate(prompt_fn=lambda req: f"APPROVE {req.nonce}"))
+        out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
+        assert out.allowed is False and ex.calls == []
+        assert "signed" in (out.denial_reason or "")
+
+    def test_require_signed_allows_verified_danger(self):
+        b = _trusted_binary()
+        if not b:
+            return
+        ex = _FakeExecutor("danger-full-access")
+        reg = _SignedPolicyRegistry("danger-full-access", b,
+                                    require_signed=True, signature_status="verified")
+        gov = GovernedExecutor(executor=ex, registry=reg,
+                               consent=ConsentGate(prompt_fn=lambda req: f"APPROVE {req.nonce}"))
+        out = gov.execute("nmap_scan", {"target": "10.0.0.5"})
+        assert out.allowed is True and len(ex.calls) == 1

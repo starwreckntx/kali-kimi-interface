@@ -54,12 +54,19 @@ def _canonical(obj: Any) -> bytes:
 class AuditLog:
     """Append-only hash-chained, HMAC-tagged audit trail."""
 
-    def __init__(self, key: Optional[bytes] = None, session_id: Optional[str] = None):
-        # An ephemeral key still tamper-evidences the trail for the life of the process
-        # and any consumer that trusts this run. Persist/inject a key for cross-run
-        # non-repudiation.
+    def __init__(self, key: Optional[bytes] = None, session_id: Optional[str] = None,
+                 signing_key: Optional[bytes] = None):
+        # Per-entry HMAC tamper-evidences the trail within the process. F7: an optional Ed25519
+        # signing_key adds asymmetric NON-REPUDIATION — at save() the chain head (which commits
+        # to every entry via the SHA-256 link) is signed once, externally verifiable with only
+        # the public key. (Per-entry Ed25519 is left to a PyCA build; pure Python is ~250ms/op.)
         self.key = key if key is not None else secrets.token_bytes(32)
         self.session_id = session_id or f"kki-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        self.signing_key = signing_key
+        self.public_key: Optional[bytes] = None
+        if signing_key is not None:
+            from . import crypto
+            self.public_key = crypto.public_key(signing_key)
         self._entries: List[AuditEntry] = []
 
     @property
@@ -122,14 +129,15 @@ class AuditLog:
         return True, None
 
     @staticmethod
-    def verify_file(path: str, key: Optional[bytes] = None) -> Tuple[bool, Optional[int], str]:
+    def verify_file(path: str, key: Optional[bytes] = None,
+                    public_key: Optional[bytes] = None) -> Tuple[bool, Optional[int], str]:
         """Read back a saved chain file and verify its integrity.
 
-        Re-walks the SHA-256 hash chain (recomputing each entry_hash from its body and
-        checking prev_hash linkage) — this is keyless and detects any payload tampering or
-        reordering. If ``key`` is supplied, the HMAC tag is also checked. The on-disk format
-        deliberately omits the key, so cross-process HMAC verification requires injecting
-        the same key used to write the chain (see the Ed25519/HSM upgrade path).
+        Re-walks the SHA-256 hash chain (recomputing each entry_hash and checking prev_hash
+        linkage) — keyless, detects payload tampering or reordering. If ``key`` is supplied the
+        HMAC tag is checked too. If ``public_key`` is supplied and the file carries an Ed25519
+        ``chain_signature`` (F7), the signature over the recomputed chain digest is verified —
+        externally provable non-repudiation with only the public key.
 
         Returns (ok, first_bad_seq, reason). first_bad_seq is None when ok.
         """
@@ -155,6 +163,16 @@ class AuditLog:
                 if not hmac.compare_digest(expected, entry["hmac"]):
                     return False, entry["seq"], "hmac_mismatch"
             prev_hash = entry["entry_hash"]
+
+        if public_key is not None:
+            sig_obj = data.get("chain_signature")
+            if not sig_obj:
+                return False, None, "signature_missing"
+            digest = hashlib.sha256(
+                _canonical([e["entry_hash"] for e in entries])).hexdigest()
+            from . import crypto
+            if not crypto.verify_detached(digest.encode("utf-8"), sig_obj, public_key):
+                return False, None, "signature_mismatch"
         return True, None, "ok"
 
     def auditor_state(self) -> Dict[str, Any]:
@@ -173,11 +191,19 @@ class AuditLog:
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        state = self.auditor_state()
+        out = {
             "session_id": self.session_id,
-            "auditor_state": self.auditor_state(),
+            "auditor_state": state,
             "entries": [e.to_dict() for e in self._entries],
         }
+        if self.signing_key is not None:
+            # Sign the chain digest (a hash committing to every entry hash) — one Ed25519
+            # signature gives the whole chain non-repudiation.
+            from . import crypto
+            out["chain_signature"] = crypto.sign_detached(
+                state["chain_digest"].encode("utf-8"), self.signing_key)
+        return out
 
     def save(self, path: str) -> str:
         import os

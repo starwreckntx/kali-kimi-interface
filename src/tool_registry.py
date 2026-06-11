@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sys
 from dataclasses import dataclass, asdict
 from enum import Enum
 from pathlib import Path
@@ -475,27 +476,49 @@ class VerifiableToolRegistry:
         report = registry.integrity_report()
     """
 
-    def __init__(self, manifest: Any = None):
+    def __init__(self, manifest: Any = None, pubkey: Any = None, require_signed: bool = False):
         """Build the registry. When ``manifest`` (a path or a dict of known-good fingerprints)
         is supplied, F4 root-of-trust mode is engaged: each installed binary's on-disk hash is
         checked against the manifest at boot and tools that mismatch (or are absent from the
-        manifest) are flagged and excluded from ``available_tools``. Without a manifest the
-        baseline is trust-on-first-use (the engine logs a high-visibility warning)."""
+        manifest) are flagged and excluded from ``available_tools``.
+
+        F7 (Phase 7): when ``pubkey`` is supplied, a file manifest MUST carry a valid detached
+        Ed25519 signature (``<manifest>.sig``) verified against ``pubkey`` — a present-but-bad
+        or required-but-missing signature raises ``crypto.SignatureError`` (CRITICAL_HALT, no
+        TOFU fallback). ``require_signed`` makes the engine refuse danger-tier tools unless the
+        manifest signature verified. Without a manifest the baseline is trust-on-first-use."""
         self.tools: Dict[str, ToolVerif] = {}
         self.manifest_path: Optional[str] = None
-        self.manifest_fingerprints: Optional[Dict[str, str]] = self._load_manifest(manifest)
+        self.require_signed: bool = require_signed
+        self.signature_status: str = "unsigned"
+        self.manifest_fingerprints: Optional[Dict[str, str]] = self._load_manifest(manifest, pubkey)
         self.manifest_mode: bool = self.manifest_fingerprints is not None
         self.root_of_trust: str = "manifest" if self.manifest_mode else "tofu"
         self._build_registry()
 
-    def _load_manifest(self, manifest: Any) -> Optional[Dict[str, str]]:
-        """Normalize a manifest (path or dict) to a flat {path-or-name: sha256} mapping."""
+    def _load_manifest(self, manifest: Any, pubkey: Any = None) -> Optional[Dict[str, str]]:
+        """Normalize a manifest (path or dict) to a flat {path-or-name: sha256} mapping.
+
+        Verifies the detached Ed25519 signature first when a pubkey is supplied for a file
+        manifest; a failure halts before any manifest content is trusted."""
         if manifest is None:
             return None
         if isinstance(manifest, dict):
             data = manifest
+            if pubkey is not None:
+                self.signature_status = "unsigned-dict"   # in-process injection, not signable
         else:
             self.manifest_path = str(manifest)
+            if pubkey is not None:
+                from governance import crypto
+                trusted = crypto.resolve_pubkey(pubkey)
+                ok, reason = crypto.verify_file_signature(self.manifest_path, trusted)
+                if not ok:
+                    # CRITICAL_HALT: a signed root of trust was demanded and could not be proven.
+                    raise crypto.SignatureError(
+                        f"manifest signature verification failed ({reason}) — refusing to start "
+                        f"(no trust-on-first-use fallback when a public key is supplied)")
+                self.signature_status = "verified"
             with open(manifest) as f:
                 data = json.load(f)
         fingerprints: Dict[str, str] = {}
@@ -675,9 +698,37 @@ if __name__ == "__main__":
     parser.add_argument("--report", "-r", action="store_true", help="Full integrity report")
     parser.add_argument("--manifest", "-m", help="Load a known-good manifest as the F4 root of trust")
     parser.add_argument("--save-manifest", "-s", help="Generate a manifest from the current binaries")
+    parser.add_argument("--pubkey", help="Ed25519 public key (hex or file) to verify a signed manifest (F7)")
+    parser.add_argument("--gen-key", help="Generate an Ed25519 keypair -> <PREFIX>.key (seed) + <PREFIX>.pub")
+    parser.add_argument("--sign-manifest", help="Offline-sign this manifest file (needs --key)")
+    parser.add_argument("--key", help="Ed25519 private seed (hex or file) for --sign-manifest")
     parser.add_argument("--category", "-c", help="Filter by category")
     args = parser.parse_args()
-    registry = VerifiableToolRegistry(manifest=args.manifest)
+
+    # --- F7 offline signing utility (standalone; no registry needed) ---
+    if args.gen_key:
+        from governance import crypto
+        seed = crypto.generate_seed()
+        Path(args.gen_key + ".key").write_text(seed.hex())
+        Path(args.gen_key + ".pub").write_text(crypto.public_key(seed).hex())
+        print(f"Keypair written: {args.gen_key}.key (PRIVATE seed — protect offline) "
+              f"{args.gen_key}.pub (public)  [backend={crypto.BACKEND}]")
+        sys.exit(0)
+    if args.sign_manifest:
+        from governance import crypto
+        if not args.key:
+            print("--sign-manifest requires --key <seed hex or file>"); sys.exit(2)
+        seed = crypto.resolve_seed(args.key)
+        sig_path = crypto.write_signature(args.sign_manifest, seed)
+        print(f"Signed: {sig_path}  [backend={crypto.BACKEND}]")
+        sys.exit(0)
+
+    try:
+        registry = VerifiableToolRegistry(manifest=args.manifest, pubkey=args.pubkey)
+    except Exception as e:
+        # CRITICAL_HALT on a manifest signature failure — do not start.
+        print(f"[CRITICAL_HALT] {e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.list:
         tools = registry.by_category(args.category) if args.category else registry.all_tools()
