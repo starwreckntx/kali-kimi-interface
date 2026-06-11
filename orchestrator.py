@@ -16,8 +16,11 @@ Architecture:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -30,11 +33,44 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from harness_integration import SecurityToolExecutor
+from tool_registry import VerifiableToolRegistry
 from kali_tools import SecurityToolResult, SecurityToolError
+from governance.engine import GovernedExecutor, GovernedResult
+from governance.policy import PolicyEngine
+from governance.consent import ConsentGate
+from governance.audit import AuditLog
+from governance.crypto import SignatureError
 
 
-KIMI_CLI = "/home/starwreck/.local/bin/kimi"
-WORK_DIR = "/home/starwreck/kali-kimi-interface"
+# Default working directory is the repository root (this file's directory), so the
+# orchestrator runs out-of-the-box for anyone who has cloned the repo.
+DEFAULT_WORK_DIR = Path(__file__).resolve().parent
+
+
+def resolve_kimi_cli(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate an executable Kimi CLI binary.
+
+    Resolution order (first executable match wins):
+      1. An explicit path (e.g. the --kimi-cli flag)
+      2. The KIMI_CLI environment variable
+      3. ``kimi`` discovered on PATH
+      4. ``~/.local/bin/kimi`` (the conventional pip --user install location)
+
+    Returns the resolved absolute path, or ``None`` if no executable was found.
+    """
+    candidates = [
+        explicit,
+        os.environ.get("KIMI_CLI"),
+        shutil.which("kimi"),
+        str(Path.home() / ".local" / "bin" / "kimi"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    return None
 
 
 @dataclass
@@ -125,25 +161,69 @@ class KaliKimiOrchestrator:
         }
     }
     
-    def __init__(self, verbose: bool = False):
-        self.executor = SecurityToolExecutor()
+    def __init__(
+        self,
+        verbose: bool = False,
+        kimi_cli: Optional[str] = None,
+        work_dir: Optional[str] = None,
+        governed: bool = True,
+        executor: Any = None,
+        network_scope: Optional[List[str]] = None,
+        consent_prompt: Any = None,
+        consent_timeout: float = 30.0,
+        manifest: Optional[str] = None,
+        pubkey: Optional[str] = None,
+        require_signed: bool = False,
+    ):
         self.verbose = verbose
+        self.work_dir = str(Path(work_dir).expanduser().resolve()) if work_dir else str(DEFAULT_WORK_DIR)
+        self.kimi_cli = resolve_kimi_cli(kimi_cli)
+        # Route every tool call through the governance gate by default. Inject an executor
+        # (e.g. a stub) for test isolation; pass governed=False only to bypass for tests.
+        if executor is not None:
+            self.executor = executor
+        elif governed:
+            # F4/F7: a manifest engages the verifiable root of trust; a pubkey demands a valid
+            # Ed25519 signature over it (CRITICAL_HALT on failure). Without a manifest the
+            # registry falls back to TOFU and the engine logs a high-visibility warning.
+            self.executor = GovernedExecutor(
+                executor=SecurityToolExecutor(),
+                registry=VerifiableToolRegistry(manifest=manifest, pubkey=pubkey,
+                                                require_signed=require_signed),
+                policy=PolicyEngine(network_scope=network_scope),
+                consent=ConsentGate(prompt_fn=consent_prompt, timeout=consent_timeout),
+                audit=AuditLog(),
+            )
+        else:
+            self.executor = SecurityToolExecutor()
+        # Dispatch decisions key off the *actual* executor type, not just the flag.
+        self.governed = isinstance(self.executor, GovernedExecutor)
         self.sessions: Dict[str, OrchestratorSession] = {}
-    
+
+    def require_kimi(self) -> str:
+        """Return the Kimi CLI path, raising a clear error if it is unavailable."""
+        if not self.kimi_cli:
+            raise SecurityToolError(
+                "Kimi CLI not found. Install it and ensure `kimi` is on your PATH, "
+                "set the KIMI_CLI environment variable to its full path, or pass "
+                "--kimi-cli /path/to/kimi."
+            )
+        return self.kimi_cli
+
     def _call_kimi(self, prompt: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Call Kimi CLI with a prompt, return parsed response."""
-        
-        cmd = [KIMI_CLI, "--print", "--quiet", "--prompt", prompt, "-w", WORK_DIR]
+
+        cmd = [self.require_kimi(), "--print", "--quiet", "--prompt", prompt, "-w", self.work_dir]
         if session_id:
             cmd.extend(["-r", session_id])
-        
+
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
-                cwd=WORK_DIR
+                cwd=self.work_dir
             )
             
             response = result.stdout.strip()
@@ -250,78 +330,123 @@ OR when done:
 Start your assessment. Return your FIRST tool call as JSON now."""
 
     def _execute_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool call through the KKI harness."""
-        
+        """Execute a tool call. masscan/tshark are now first-class harness tools, so every
+        tool — with no exceptions — goes through the executor (and, when governed, the full
+        governance gate). There is no direct-subprocess wrapper path anymore."""
+
         tool_name = tool_call.get("tool", "")
         params = tool_call.get("params", {})
-        
+
         if self.verbose:
             print(f"[ORCHESTRATOR] Executing: {tool_name} with {json.dumps(params)}")
-        
-        # Handle masscan wrapper (not in harness natively)
-        if tool_name == "masscan_quick":
-            return self._run_masscan(params)
-        
-        # Handle tshark wrapper
-        if tool_name == "tshark_capture":
-            return self._run_tshark(params)
-        
-        # Use harness for standard tools
+
+        if self.governed:
+            return self._governed_dispatch(tool_name, params)
+
+        # Ungoverned path (test isolation only).
         try:
-            result = self.executor.execute(tool_name, params)
-            return result
+            return self.executor.execute(tool_name, params)
         except Exception as e:
             return {"error": str(e), "tool": tool_name, "success": False}
+
+    def _governed_dispatch(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a tool through the governance gate (with optional snap-back) and normalize
+        the GovernedResult to the dict shape the assessment loop already expects."""
+        snap = self._snap_before(tool_name)
+        gr = self.executor.execute(tool_name, params)
+        if gr.allowed:
+            self._snap_after(snap, success=True)
+            result = dict(gr.result or {})
+            result.setdefault("tool", tool_name)
+            return result
+        # Blocked by governance, or executed and failed — roll back any snapshot.
+        self._snap_after(snap, success=False)
+        return self._deny_dict(tool_name, gr)
+
+    @staticmethod
+    def _deny_dict(tool_name: str, gr: "GovernedResult") -> Dict[str, Any]:
+        # Shaped like a SecurityToolResult error so the existing loop error path catches it
+        # with no special-casing.
+        return {
+            "tool": tool_name,
+            "error": gr.denial_reason or "blocked by governance",
+            "success": False,
+            "returncode": -1,
+            "parsed_output": {},
+            "governance": gr.to_dict(),
+        }
     
-    def _run_masscan(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Wrapper for masscan."""
-        target = params.get("target", "")
-        ports = params.get("ports", "1-1000")
-        rate = params.get("rate", "1000")
-        
-        try:
-            result = subprocess.run(
-                ["masscan", target, "-p", ports, "--rate", rate],
-                capture_output=True, text=True, timeout=120
-            )
-            return {
-                "tool": "masscan",
-                "command": f"masscan {target} -p {ports} --rate {rate}",
-                "returncode": result.returncode,
-                "stdout": result.stdout[:50000],
-                "stderr": result.stderr[:50000],
-                "parsed_output": {"success": result.returncode == 0, "raw_preview": result.stdout[:5000]},
-                "duration_ms": 0,
-                "timestamp": datetime.now().isoformat()
-            }
-        except Exception as e:
-            return {"error": str(e), "tool": "masscan", "success": False}
-    
-    def _run_tshark(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Wrapper for tshark."""
-        interface = params.get("interface", "eth0")
-        duration = params.get("duration", 10)
-        bpf_filter = params.get("filter", "")
-        
-        try:
-            cmd = ["tshark", "-i", interface, "-a", f"duration:{duration}", "-c", "100"]
-            if bpf_filter:
-                cmd.extend(["-f", bpf_filter])
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=int(duration) + 10)
-            return {
-                "tool": "tshark",
-                "command": " ".join(cmd),
-                "returncode": result.returncode,
-                "stdout": result.stdout[:50000],
-                "stderr": result.stderr[:50000],
-                "parsed_output": {"success": result.returncode == 0, "packet_count": len(result.stdout.strip().split('\n'))},
-                "duration_ms": int(duration * 1000),
-                "timestamp": datetime.now().isoformat()
-            }
-        except Exception as e:
-            return {"error": str(e), "tool": "tshark", "success": False}
-    
+    # --- snap-back recovery (MOD-045) ------------------------------------------------
+    # Capture a reversible snapshot of the artifacts workspace before a governed tool
+    # runs, so a failure or denial can roll back partial mutations. Deliberately scoped to
+    # <work_dir>/workspace and NEVER the repo/source tree: snapshotting work_dir itself
+    # (which defaults to the repo root) would copy the whole checkout incl. .git on every
+    # call. In the current toolset most output is stdout-captured, so this is a safety net
+    # for file-writing tools rather than a hot path.
+
+    def _workspace_dir(self) -> Path:
+        return Path(self.work_dir) / "workspace"
+
+    def _create_snap(self, target_dir: Path) -> Optional[str]:
+        """Copy target_dir to a sibling .snap. Refuses unsafe targets; returns snap path."""
+        rp = target_dir.resolve()
+        # Guard: never snapshot the repo root or any directory holding a VCS checkout.
+        if rp == Path(self.work_dir).resolve() or (rp / ".git").exists():
+            return None
+        if not rp.exists():
+            return None
+        snap_path = f"{rp}.snap"
+        if os.path.exists(snap_path):
+            shutil.rmtree(snap_path)
+        shutil.copytree(rp, snap_path)
+        return snap_path
+
+    def _restore_snap(self, target_dir: Path, snap_path: str) -> None:
+        rp = target_dir.resolve()
+        if rp.exists():
+            shutil.rmtree(rp)
+        os.rename(snap_path, str(rp))
+
+    def _delete_snap(self, snap_path: str) -> None:
+        if snap_path and os.path.exists(snap_path):
+            shutil.rmtree(snap_path)
+
+    @staticmethod
+    def _hash_snap(snap_path: str) -> str:
+        h = hashlib.sha256()
+        h.update(snap_path.encode())
+        mtime = os.path.getmtime(snap_path) if snap_path and os.path.exists(snap_path) else 0
+        h.update(str(mtime).encode())
+        return h.hexdigest()
+
+    def _snap_before(self, tool_name: str) -> Optional[str]:
+        """Snapshot the workspace for danger/workspace-write tools, after the consent gate
+        has been reached but before execution. Returns the snap path, or None."""
+        if not self.governed:
+            return None
+        permission = self.executor._permission_for(tool_name)
+        if permission not in ("danger-full-access", "workspace-write"):
+            return None
+        ws = self._workspace_dir()
+        snap = self._create_snap(ws)
+        if snap:
+            self.executor.audit.log_integrity({
+                "event": "snap_created", "tool": tool_name,
+                "workspace": str(ws), "snap_hash": self._hash_snap(snap),
+            })
+        return snap
+
+    def _snap_after(self, snap_path: Optional[str], success: bool) -> None:
+        if not snap_path:
+            return
+        ws = self._workspace_dir()
+        if success:
+            self._delete_snap(snap_path)
+            self.executor.audit.log_integrity({"event": "snap_deleted", "status": "success"})
+        else:
+            self._restore_snap(ws, snap_path)
+            self.executor.audit.log_integrity({"event": "snap_restored", "status": "rolled_back"})
+
     def run_assessment(self, target: str, task: str = "full recon", depth: str = "standard", max_rounds: int = 10) -> Dict[str, Any]:
         """
         Run a full AI-driven assessment.
@@ -329,7 +454,13 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         Returns session results with all findings.
         """
         
+        # Fail fast with a clear message if the Kimi CLI is missing.
+        self.require_kimi()
+
         session_id = f"kki-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        if self.governed:
+            # Correlate the audit chain with this assessment session.
+            self.executor.audit.session_id = session_id
         session = OrchestratorSession(
             session_id=session_id,
             target=target,
@@ -344,6 +475,7 @@ Start your assessment. Return your FIRST tool call as JSON now."""
         print(f"\n{'='*60}")
         print(f"KALI-KIMI ORCHESTRATOR — Session {session_id}")
         print(f"Target: {target} | Task: {task} | Depth: {depth}")
+        print(f"Kimi CLI: {self.kimi_cli} | Work dir: {self.work_dir}")
         print(f"{'='*60}\n")
         
         # Build initial prompt
@@ -424,13 +556,24 @@ Return your decision as JSON now."""
                 print(f"[!] Unknown action: {action}")
                 break
         
-        # Save session
-        output_file = f"/home/starwreck/kali-kimi-interface/results/{session_id}.json"
-        Path(output_file).parent.mkdir(exist_ok=True)
+        # Save session under the working directory's results/ folder
+        output_file = Path(self.work_dir) / "results" / f"{session_id}.json"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, 'w') as f:
             json.dump(session.to_dict(), f, indent=2)
         print(f"\n[📁] Session saved: {output_file}")
-        
+
+        # Mnemosyne mirror: the signed audit chain + any boundary-consent pending actions.
+        if self.governed:
+            audit_dir = Path(self.work_dir) / "audit"
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            chain_file = audit_dir / f"{session_id}.chain"
+            self.executor.save_audit(str(chain_file))
+            boundary = self.executor.session_report()["boundary_consent"]
+            with open(audit_dir / f"{session_id}.pending", 'w') as f:
+                json.dump(boundary, f, indent=2)
+            print(f"[🔐] Audit chain saved: {chain_file}")
+
         return session.to_dict()
 
 
@@ -442,18 +585,46 @@ def main():
     parser.add_argument("--task", default="full recon", help="Task description")
     parser.add_argument("--depth", choices=["quick", "standard", "deep"], default="standard")
     parser.add_argument("--max-rounds", type=int, default=10, help="Max orchestration rounds")
+    parser.add_argument("--kimi-cli", help="Path to the Kimi CLI (overrides PATH / KIMI_CLI env var)")
+    parser.add_argument("--work-dir", help="Working directory for Kimi (default: repo root)")
+    parser.add_argument("--network-scope", action="append",
+                        help="Allowed target CIDR for the governance scope gate (repeatable)")
+    parser.add_argument("--manifest",
+                        help="Known-good tool manifest (F4 root of trust); omit to fall back to TOFU")
+    parser.add_argument("--pubkey",
+                        help="Ed25519 public key (hex or file) — require a signed manifest (F7)")
+    parser.add_argument("--require-signed", action="store_true",
+                        help="Refuse danger-tier tools unless the manifest signature verified")
     parser.add_argument("--verbose", "-v", action="store_true")
-    
+
     args = parser.parse_args()
-    
-    orchestrator = KaliKimiOrchestrator(verbose=args.verbose)
-    result = orchestrator.run_assessment(
-        target=args.target,
-        task=args.task,
-        depth=args.depth,
-        max_rounds=args.max_rounds
-    )
-    
+
+    # Governance is always on from the CLI — there is no --ungoverned bypass flag. The
+    # `governed` constructor parameter remains for in-process test injection only.
+    try:
+        orchestrator = KaliKimiOrchestrator(
+            verbose=args.verbose,
+            kimi_cli=args.kimi_cli,
+            work_dir=args.work_dir,
+            network_scope=args.network_scope,
+            manifest=args.manifest,
+            pubkey=args.pubkey,
+            require_signed=args.require_signed,
+        )
+        result = orchestrator.run_assessment(
+            target=args.target,
+            task=args.task,
+            depth=args.depth,
+            max_rounds=args.max_rounds,
+        )
+    except SignatureError as e:
+        # F7 CRITICAL_HALT: a signed root of trust was demanded and could not be proven.
+        print(f"[CRITICAL_HALT] {e}", file=sys.stderr)
+        sys.exit(1)
+    except SecurityToolError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        sys.exit(1)
+
     print("\n" + json.dumps(result, indent=2))
 
 

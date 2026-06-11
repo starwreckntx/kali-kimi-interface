@@ -49,6 +49,12 @@ network_map_*.json
 *.pcap
 *.cap
 
+# Governance audit / session artifacts (never commit scan provenance)
+results/
+audit/
+*.chain
+*.pending
+
 # Kali specific
 *.log
 .wifiscan*

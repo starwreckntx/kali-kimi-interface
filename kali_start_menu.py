@@ -6,6 +6,7 @@ A comprehensive text-based menu system for Kali CLI tools
 
 import os
 import sys
+import shlex
 import subprocess
 import shutil
 from typing import Dict, List, Tuple, Optional
@@ -473,12 +474,16 @@ class KaliStartMenu:
                 print(f"\nEnter arguments for {tool_name}:")
                 print(f"Example: {self._color(help_cmd.split(' ', 1)[1] if ' ' in help_cmd else '', 'cyan')}")
                 args = input(f"{tool_name} ")
-                
-                full_cmd = f"{path} {args}"
-                print(f"\n{self._color('▶ Executing:', 'green')} {full_cmd}\n")
-                
+
+                # Parse into an argument array and run with shell=False — no shell
+                # interpretation, so metacharacters in the typed args cannot inject
+                # commands (F3). shell features (pipes/redirects) are intentionally dropped.
                 try:
-                    subprocess.run(full_cmd, shell=True)
+                    argv = [path] + shlex.split(args)
+                    print(f"\n{self._color('▶ Executing:', 'green')} {' '.join(argv)}\n")
+                    subprocess.run(argv, shell=False)
+                except ValueError as e:
+                    print(f"Error parsing arguments (check your quotes): {e}")
                 except Exception as e:
                     print(f"Error: {e}")
                 

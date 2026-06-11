@@ -72,6 +72,7 @@ class KaliToolAdapter:
         'wpscan': '/usr/bin/wpscan',
         'ffuf': '/usr/bin/ffuf',
         'wfuzz': '/usr/bin/wfuzz',
+        'tshark': '/usr/bin/tshark',
     }
     
     # Characters that could enable command injection
@@ -156,14 +157,27 @@ class KaliToolAdapter:
         
         start = time.time()
         timeout = custom_timeout or self.timeout
-        
+
+        # If the governance engine pinned this binary's inode, execute the pinned fd via
+        # /proc/self/fd (no path re-resolution) so the bytes attested are the bytes run.
+        # Falls back to a normal path exec when no pin is active (standalone / read-only use).
+        pin = None
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
+            from governance.attestation import get_active_pin
+            pin = get_active_pin()
+        except Exception:
+            pin = None
+
+        try:
+            if pin is not None and getattr(pin, "fd", None) is not None:
+                result = pin.run(cmd, capture_output=True, text=True, timeout=timeout)
+            else:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
         except subprocess.TimeoutExpired:
             raise SecurityToolError(f"Command timed out after {timeout}s")
         except FileNotFoundError:
@@ -539,6 +553,75 @@ class KaliToolAdapter:
                 'success': nmap_result.returncode == 0
             }
         }
+
+    # --- masscan / tshark under the same L2 discipline -------------------------------
+    # These previously ran via direct subprocess.run in the orchestrator, bypassing the
+    # adapter's validation, rate limit, timeout, and output truncation. They are now first
+    # class adapter methods so they inherit _validate_target, _check_rate_limit, and
+    # _execute_tool (argument arrays, no shell=True, timeout + truncation + parsing).
+
+    MAX_MASSCAN_RATE: int = 100000   # packets/sec hard ceiling
+    ALLOWED_TSHARK_INTERFACES = {'eth0', 'eth1', 'wlan0', 'wlan1', 'lo', 'any'}
+
+    def masscan_scan(
+        self,
+        target: str,
+        ports: str = '1-1000',
+        rate: int = 1000,
+        timeout: Optional[int] = None,
+    ) -> SecurityToolResult:
+        """Execute a masscan port scan with a hard rate ceiling.
+
+        Raises SecurityToolError if the requested rate exceeds MAX_MASSCAN_RATE.
+        """
+        self._check_rate_limit()
+        target = self._validate_target(target)
+        ports = self._validate_target(str(ports))   # reuse the metachar/allowlist gate
+        try:
+            rate_int = int(rate)
+        except (TypeError, ValueError):
+            raise SecurityToolError(f"masscan rate must be an integer, got {rate!r}")
+        if rate_int <= 0:
+            raise SecurityToolError("masscan rate must be positive")
+        if rate_int > self.MAX_MASSCAN_RATE:
+            raise SecurityToolError(
+                f"masscan rate {rate_int} exceeds MAX_MASSCAN_RATE {self.MAX_MASSCAN_RATE}"
+            )
+
+        path = self.TOOL_PATHS.get('masscan', 'masscan')
+        cmd = [path, target, '-p', ports, '--rate', str(rate_int)]
+        return self._execute_tool('masscan', cmd, timeout)
+
+    def tshark_capture(
+        self,
+        interface: str = 'any',
+        filter_expr: str = '',
+        duration: int = 10,
+        timeout: Optional[int] = None,
+    ) -> SecurityToolResult:
+        """Capture packets with tshark, bounded by an interface allowlist and a duration.
+
+        Raises SecurityToolError if the interface is not in ALLOWED_TSHARK_INTERFACES.
+        """
+        self._check_rate_limit()
+        if interface not in self.ALLOWED_TSHARK_INTERFACES:
+            raise SecurityToolError(
+                f"interface {interface!r} not in allowed set {sorted(self.ALLOWED_TSHARK_INTERFACES)}"
+            )
+        try:
+            duration_int = int(duration)
+        except (TypeError, ValueError):
+            raise SecurityToolError(f"duration must be an integer, got {duration!r}")
+        duration_int = max(1, min(duration_int, 300))   # 1..300s
+
+        path = self.TOOL_PATHS.get('tshark', 'tshark')
+        cmd = [path, '-i', interface, '-a', f'duration:{duration_int}', '-c', '100']
+        if filter_expr:
+            # Reuse the metachar/allowlist gate to reject shell-dangerous filter strings.
+            filter_expr = self._validate_target(filter_expr)
+            cmd.extend(['-f', filter_expr])
+        # Give the subprocess a little headroom beyond the capture duration.
+        return self._execute_tool('tshark', cmd, timeout or (duration_int + 10))
 
 
 def main():
