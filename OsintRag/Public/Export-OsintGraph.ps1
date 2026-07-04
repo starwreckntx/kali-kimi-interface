@@ -45,7 +45,10 @@ function Export-OsintGraph {
         foreach ($indicator in (Get-OsintIndicator -Text $rec.TextContent)) {
             $key = "$($indicator.Type):$($indicator.Value)"
             if (-not $indicatorIds.ContainsKey($key)) {
-                $nid = 'ind_' + [Math]::Abs($key.GetHashCode()).ToString('x')
+                # Deterministic node id: String.GetHashCode() is randomized per
+                # process in .NET Core, which would break graph merging across runs.
+                $hashBytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($key))
+                $nid = 'ind_' + [System.Convert]::ToHexString($hashBytes).Substring(0, 12).ToLowerInvariant()
                 $indicatorIds[$key] = $nid
                 $nodes.Add([pscustomobject]@{
                     id         = $nid

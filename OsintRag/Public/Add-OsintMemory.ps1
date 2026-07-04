@@ -38,11 +38,19 @@ function Add-OsintMemory {
             $vector = [float[]]@(Get-DenseVector -Text $Chunk.TextContent)
         }
 
+        # DiscoveryTime is mandatory on chunks from Split-OsintData, but guard the
+        # custom/malformed case: casting $null (or a missing property) to the
+        # [datetime] value type is a terminating error.
+        $discoveryTime = [datetime]::MinValue
+        if ($Chunk.PSObject.Properties['DiscoveryTime'] -and $null -ne $Chunk.DiscoveryTime) {
+            $discoveryTime = [datetime]$Chunk.DiscoveryTime
+        }
+
         $record = [pscustomobject]@{
             Id            = $Chunk.Id
             TextContent   = $Chunk.TextContent
             EntityType    = $Chunk.EntityType
-            DiscoveryTime = [datetime]$Chunk.DiscoveryTime
+            DiscoveryTime = $discoveryTime
             SourceAgent   = $Chunk.SourceAgent
             Vector        = if ($vector) { [float[]]$vector } else { [float[]]@() }
         }

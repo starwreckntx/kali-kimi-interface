@@ -93,7 +93,7 @@ lexical overlap is decided by dense search.
    subprocess.run(
        ["pwsh", "-NoProfile", "-Command",
         "Import-Module ./OsintRag/OsintRag.psd1;"
-        "$input | Split-OsintData -SourceAgent 'nmap' -DiscoveryTime (Get-Date) | Add-OsintMemory;"
+        "($input | Out-String) | Split-OsintData -SourceAgent 'nmap' -DiscoveryTime (Get-Date) | Add-OsintMemory;"
         "Search-OsintIndex -Query $env:QUERY -TopK 5 | ConvertTo-Json"],
        input=tool_output, capture_output=True, text=True)
    ```

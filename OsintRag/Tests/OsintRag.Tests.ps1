@@ -139,6 +139,22 @@ Describe 'Split-OsintData (chunking)' {
         $chunks = Split-OsintData -InputData '{"asset":"192.168.5.5"}' -DiscoveryTime (Get-Date)
         $chunks[0].EntityType | Should -Be 'host'
     }
+
+    It 'parses an Nmap XML host into a host chunk' {
+        $xml = '<nmaprun><host><address addr="10.0.0.9" addrtype="ipv4"/><hostnames><hostname name="db.local"/></hostnames><ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port></ports></host></nmaprun>'
+        $chunks = Split-OsintData -InputData $xml -DiscoveryTime (Get-Date) -SourceAgent 'nmap'
+        $chunks[0].EntityType | Should -Be 'host'
+        $chunks[0].TextContent | Should -Match '10\.0\.0\.9'
+        $chunks[0].TextContent | Should -Match '22/tcp open ssh'
+    }
+
+    It 'parses an Nmap port that is missing the optional <service> element' {
+        # Regression: a service-less port must not throw and fall through to text.
+        $xml = '<nmaprun><host><address addr="10.0.0.9" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open"/></port></ports></host></nmaprun>'
+        $chunks = Split-OsintData -InputData $xml -DiscoveryTime (Get-Date) -SourceAgent 'nmap'
+        $chunks[0].EntityType | Should -Be 'host'
+        $chunks[0].TextContent | Should -Match '22/tcp open'
+    }
 }
 
 Describe 'Get-DenseVector (embedding client)' {
@@ -153,6 +169,11 @@ Describe 'Get-DenseVector (embedding client)' {
     It 'parses an OpenAI-style response into a float[]' {
         Mock -ModuleName OsintRag Invoke-RestMethod { [pscustomobject]@{ data = @([pscustomobject]@{ embedding = @(1.0, 2.0) }) } }
         (Get-DenseVector -Text 'sample').Count | Should -Be 2
+    }
+
+    It 'throws a clear error (not a null reference) when the response is null' {
+        Mock -ModuleName OsintRag Invoke-RestMethod { $null }
+        { Get-DenseVector -Text 'sample' } | Should -Throw -ExpectedMessage '*did not contain a recognizable vector*'
     }
 }
 
@@ -174,6 +195,13 @@ Describe 'Add-OsintMemory / store accessors' {
         Split-OsintData -InputData 'a line' -DiscoveryTime (Get-Date) | Add-OsintMemory
         (Clear-OsintMemory -Confirm:$false) | Should -Be 1
         (Get-OsintMemory).Count | Should -Be 0
+    }
+
+    It 'does not throw on a custom chunk missing DiscoveryTime' {
+        # Regression: casting a null/absent DiscoveryTime to [datetime] must not crash.
+        $custom = [pscustomobject]@{ Id = 'x1'; TextContent = 'note'; EntityType = 'text'; SourceAgent = 'manual' }
+        { $custom | Add-OsintMemory } | Should -Not -Throw
+        (Get-OsintMemory)[0].DiscoveryTime | Should -Be ([datetime]::MinValue)
     }
 }
 
@@ -234,5 +262,14 @@ Describe 'Export-OsintGraph' {
 
     It 'emits GraphViz DOT' {
         Export-OsintGraph -Format Dot | Should -Match 'digraph OsintGraph'
+    }
+
+    It 'produces deterministic indicator node ids across calls' {
+        $ids1 = (Export-OsintGraph -Format Json | ConvertFrom-Json).nodes |
+            Where-Object { $_.kind -eq 'indicator' } | ForEach-Object { $_.id } | Sort-Object
+        $ids2 = (Export-OsintGraph -Format Json | ConvertFrom-Json).nodes |
+            Where-Object { $_.kind -eq 'indicator' } | ForEach-Object { $_.id } | Sort-Object
+        ($ids1 -join ',') | Should -Be ($ids2 -join ',')
+        $ids1[0] | Should -Match '^ind_[0-9a-f]{12}$'
     }
 }

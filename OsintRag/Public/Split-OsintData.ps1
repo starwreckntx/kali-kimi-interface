@@ -73,17 +73,21 @@ function Split-OsintData {
         if ($trimmed.StartsWith('<') -and $InputData -match '<nmaprun|<host\b') {
             try {
                 [xml]$xml = $InputData
-                foreach ($hostNode in @($xml.SelectNodes('//host'))) {
-                    $addr = @($hostNode.SelectNodes('address')) |
+                foreach ($hostNode in $xml.SelectNodes('//host')) {
+                    $addr = $hostNode.SelectNodes('address') |
                         Where-Object { $_.addrtype -in 'ipv4', 'ipv6' } |
                         ForEach-Object { $_.addr } |
                         Select-Object -First 1
-                    $hostname = @($hostNode.SelectNodes('hostnames/hostname')) |
+                    $hostname = $hostNode.SelectNodes('hostnames/hostname') |
                         ForEach-Object { $_.name } |
                         Select-Object -First 1
-                    $ports = foreach ($p in @($hostNode.SelectNodes('ports/port'))) {
-                        $state = ($p.SelectSingleNode('state')).state
-                        $svc = ($p.SelectSingleNode('service')).name
+                    $ports = foreach ($p in $hostNode.SelectNodes('ports/port')) {
+                        # <state>/<service> are optional on a port; guard the null case
+                        # so a service-less port does not throw under Set-StrictMode.
+                        $stateNode = $p.SelectSingleNode('state')
+                        $svcNode = $p.SelectSingleNode('service')
+                        $state = if ($stateNode) { $stateNode.state } else { '' }
+                        $svc = if ($svcNode) { $svcNode.name } else { '' }
                         "$($p.portid)/$($p.protocol) $state $svc".Trim()
                     }
                     $parts = [System.Collections.Generic.List[string]]::new()

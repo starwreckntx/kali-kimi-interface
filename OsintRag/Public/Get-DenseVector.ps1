@@ -46,15 +46,17 @@ function Get-DenseVector {
         $response = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $body -TimeoutSec $TimeoutSec
 
         $vector = $null
-        $names = @($response.PSObject.Properties.Name)
-        if ($names -contains 'embedding') {
-            $vector = $response.embedding
-        }
-        elseif ($names -contains 'data' -and $response.data) {
-            $vector = $response.data[0].embedding
-        }
-        elseif ($names -contains 'embeddings' -and $response.embeddings) {
-            $vector = $response.embeddings[0]
+        if ($null -ne $response) {
+            $names = @($response.PSObject.Properties.Name)
+            if ($names -contains 'embedding') {
+                $vector = $response.embedding
+            }
+            elseif ($names -contains 'data' -and $response.data) {
+                $vector = $response.data[0].embedding
+            }
+            elseif ($names -contains 'embeddings' -and $response.embeddings) {
+                $vector = $response.embeddings[0]
+            }
         }
 
         if ($null -eq $vector) {
