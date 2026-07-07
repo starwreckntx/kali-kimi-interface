@@ -45,6 +45,12 @@ htmlcov/
 *.json
 !requirements.txt
 network_map_*.json
+# Integrity harness dataset + fixtures are source-of-record and MUST be tracked
+# (they are pulled dataset annotations / predicate specs / decision records, not scan
+# output). Their *generated* run artifacts (result JSON, provenance ledgers) are not.
+!integrity_harness/data/*.json
+integrity_harness/reports/*_result.json
+integrity_harness/reports/*.jsonl
 /tmp/
 *.pcap
 *.cap
