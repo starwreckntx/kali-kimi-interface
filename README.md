@@ -216,6 +216,33 @@ clear error explaining how to point it at one.
 
 Kali Kimi Interface is designed for AI agents and automation:
 
+### Hermes Harness Adapter
+
+Direct execution path for Hermes without Kimi in the loop.
+Hermes plans and reconciles; this module executes and writes session artifacts.
+
+```python
+from src.hermes_harness import HermesHarness
+
+harness = HermesHarness()
+
+# List tools / registry state
+print(len(harness.list_tools()))
+print(harness.integrity_report())
+
+# Execute one tool call
+result = harness.execute('nmap_scan', {
+    'target': '192.168.1.1',
+    'scan_type': 'syn',
+    'ports': '1-1000'
+})
+
+# Result already contains RECONCILE-friendly fields
+print(result.to_json())
+```
+
+Session artifacts are written to `results/<session_id>.json` with SHA-256 hashes.
+
 ### Structured Output
 
 All tool executions return JSON:
