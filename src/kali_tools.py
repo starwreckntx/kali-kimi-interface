@@ -127,13 +127,12 @@ class KaliToolAdapter:
         return target.strip()
     
     def _check_rate_limit(self) -> None:
-        """Check if rate limit allows another scan."""
+        """Enforce minimum interval between scans by sleeping if needed."""
         if self._last_scan_time is not None:
             elapsed = time.time() - self._last_scan_time
-            if elapsed < self._rate_limit_seconds:
-                raise SecurityToolError(
-                    f"Rate limit: wait {self._rate_limit_seconds - elapsed:.1f}s"
-                )
+            wait = self._rate_limit_seconds - elapsed
+            if wait > 0:
+                time.sleep(wait)
         self._last_scan_time = time.time()
     
     def _execute_tool(
@@ -623,8 +622,1417 @@ class KaliToolAdapter:
         # Give the subprocess a little headroom beyond the capture duration.
         return self._execute_tool('tshark', cmd, timeout or (duration_int + 10))
 
+    # === PHASE 1 PROOF-OF-LIFE METHODS (14 categories) ===
+    
+    def dnsrecon_scan(
+        self,
+        domain: str,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute dnsrecon DNS enumeration."""
+        self._check_rate_limit()
+        domain = self._validate_target(domain)
+        
+        cmd = ['dnsrecon', '-d', domain]
+        
+        return self._execute_tool(
+            tool='dnsrecon',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def unix_privesc_check(
+        self,
+        mode: str = 'standard',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Run unix-privesc-check for privilege escalation vectors."""
+        self._check_rate_limit()
+        
+        if mode not in ('standard', 'detailed'):
+            raise SecurityToolError(f"Invalid mode: {mode}")
+        
+        cmd = ['unix-privesc-check', mode]
+        
+        return self._execute_tool(
+            tool='unix-privesc-check',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def wpscan_scan(
+        self,
+        url: str,
+        enumerate: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute wpscan WordPress vulnerability scan."""
+        self._check_rate_limit()
+        url = self._validate_target(url)
+        
+        cmd = ['wpscan', '--url', url, '--no-update']
+        
+        if enumerate:
+            cmd.extend(['--enumerate', enumerate])
+        
+        return self._execute_tool(
+            tool='wpscan',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def cewl_wordlist(
+        self,
+        url: str,
+        depth: int = 2,
+        min_length: int = 3,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Generate wordlist from URL using cewl."""
+        self._check_rate_limit()
+        url = self._validate_target(url)
+        
+        if not (1 <= depth <= 10):
+            raise SecurityToolError("Depth must be 1-10")
+        if not (1 <= min_length <= 50):
+            raise SecurityToolError("min_length must be 1-50")
+        
+        cmd = ['cewl', '-d', str(depth), '-m', str(min_length), url]
+        
+        return self._execute_tool(
+            tool='cewl',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def airmon_check(
+        self,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Check wireless interfaces with airmon-ng."""
+        self._check_rate_limit()
+        
+        cmd = ['airmon-ng']
+        
+        return self._execute_tool(
+            tool='airmon-ng',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def tcpdump_list_interfaces(
+        self,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """List network interfaces with tcpdump."""
+        self._check_rate_limit()
+        
+        cmd = ['tcpdump', '-D']
+        
+        return self._execute_tool(
+            tool='tcpdump',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def binwalk_scan(
+        self,
+        file_path: str,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Scan file for embedded signatures with binwalk."""
+        self._check_rate_limit()
+        
+        path = Path(file_path)
+        if not path.exists():
+            raise SecurityToolError(f"File not found: {file_path}")
+        
+        cmd = ['binwalk', str(path)]
+        
+        return self._execute_tool(
+            tool='binwalk',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def ltrace_trace(
+        self,
+        binary: str,
+        args: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Trace library calls with ltrace."""
+        self._check_rate_limit()
+        binary = self._validate_target(binary)
+        
+        cmd = ['ltrace']
+        if args:
+            cmd.extend(args.split())
+        cmd.append(binary)
+        
+        return self._execute_tool(
+            tool='ltrace',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def searchsploit_query(
+        self,
+        term: str,
+        case_sensitive: bool = False,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Search exploit database."""
+        self._check_rate_limit()
+        
+        if any(c in term for c in self.DANGEROUS_CHARS):
+            raise SecurityToolError("Invalid characters in search term")
+        
+        cmd = ['searchsploit']
+        if case_sensitive:
+            cmd.append('-c')
+        cmd.append(term)
+        
+        return self._execute_tool(
+            tool='searchsploit',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def weeman_phish(
+        self,
+        url: str,
+        port: int = 8080,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Start weeman phishing server."""
+        self._check_rate_limit()
+        url = self._validate_target(url)
+        
+        if not (1 <= port <= 65535):
+            raise SecurityToolError("Invalid port")
+        
+        cmd = ['weeman', '-u', url, '-p', str(port)]
+        
+        return self._execute_tool(
+            tool='weeman',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def apktool_decompile(
+        self,
+        apk_path: str,
+        output_dir: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Decompile APK with apktool."""
+        self._check_rate_limit()
+        
+        path = Path(apk_path)
+        if not path.exists():
+            raise SecurityToolError(f"APK not found: {apk_path}")
+        
+        cmd = ['apktool', 'd', str(path)]
+        if output_dir:
+            cmd.extend(['-o', output_dir])
+        
+        return self._execute_tool(
+            tool='apktool',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def steghide_info(
+        self,
+        file_path: str,
+        passphrase: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Extract steganography info with steghide."""
+        self._check_rate_limit()
+        
+        path = Path(file_path)
+        if not path.exists():
+            raise SecurityToolError(f"File not found: {file_path}")
+        
+        cmd = ['steghide', 'info', str(path)]
+        if passphrase:
+            cmd.extend(['-p', passphrase])
+        
+        return self._execute_tool(
+            tool='steghide',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def recordmydesktop_capture(
+        self,
+        output_file: str,
+        duration: int = 10,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Record desktop session."""
+        self._check_rate_limit()
+        
+        if not (1 <= duration <= 300):
+            raise SecurityToolError("Duration must be 1-300 seconds")
+        
+        cmd = ['recordmydesktop', '-o', output_file, '--duration', str(duration)]
+        
+        return self._execute_tool(
+            tool='recordmydesktop',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+    
+    def netcat_port_scan(
+        self,
+        target: str,
+        port: int,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Port scan with netcat."""
+        self._check_rate_limit()
+        target = self._validate_target(target)
+        
+        if not (1 <= port <= 65535):
+            raise SecurityToolError("Invalid port")
+        
+        cmd = ['nc', '-z', '-v', '-w', '2', target, str(port)]
+        
+        return self._execute_tool(
+            tool='netcat',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+
+
+
+    def radare2_scan(
+        self,
+        file_path: str,
+        command: str = 'iS',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Run radare2 in batch mode on a binary."""
+        cmd = ['radare2', '-q', '-c', command, file_path]
+        return self._execute_tool(
+            tool='radare2',
+            cmd=cmd,
+            custom_timeout=timeout
+        )
+
+    # --- WiFi Tools ---
+
+    def aircrack_ng_crack(
+        self,
+        capture_file: str,
+        wordlist: Optional[str] = None,
+        bssid: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Crack WEP/WPA captured handshake with aircrack-ng.
+
+        Args:
+            capture_file: Path to .cap capture file
+            wordlist: Path to wordlist for WPA cracking (default: rockyou)
+            bssid: Filter by AP BSSID (optional)
+            timeout: Optional timeout override
+        """
+        path = Path(capture_file)
+        if not path.exists():
+            raise SecurityToolError(f"Capture file not found: {capture_file}")
+
+        cmd = ['aircrack-ng']
+
+        if bssid:
+            cmd.extend(['-b', self._validate_target(bssid)])
+
+        wordlist_path = wordlist or self.WORDLISTS['rockyou']
+        if Path(wordlist_path).exists():
+            cmd.extend(['-w', wordlist_path])
+        else:
+            raise SecurityToolError(f"Wordlist not found: {wordlist_path}")
+
+        cmd.append(str(path))
+        return self._execute_tool('aircrack-ng', cmd, timeout)
+
+    def airdecap_ng_decrypt(
+        self,
+        capture_file: str,
+        bssid: Optional[str] = None,
+        essid: Optional[str] = None,
+        wep_key: Optional[str] = None,
+        wpa_psk: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Decrypt WEP/WPA captured traffic with airdecap-ng.
+
+        Args:
+            capture_file: Path to .cap capture file
+            bssid: AP BSSID (optional)
+            essid: AP ESSID (optional)
+            wep_key: WEP key for decryption
+            wpa_psk: WPA PSK for decryption
+            timeout: Optional timeout override
+        """
+        path = Path(capture_file)
+        if not path.exists():
+            raise SecurityToolError(f"Capture file not found: {capture_file}")
+
+        cmd = ['airdecap-ng']
+
+        if wep_key:
+            cmd.extend(['-w', wep_key])
+        if wpa_psk:
+            cmd.extend(['-p', wpa_psk])
+        if bssid:
+            cmd.extend(['-b', self._validate_target(bssid)])
+        if essid:
+            cmd.extend(['-e', self._validate_target(essid)])
+
+        cmd.append(str(path))
+        return self._execute_tool('airdecap-ng', cmd, timeout)
+
+    def aireplay_ng_attack(
+        self,
+        interface: str,
+        attack_type: str = 'deauth',
+        bssid: Optional[str] = None,
+        target_mac: Optional[str] = None,
+        count: int = 5,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute aireplay-ng wireless attack.
+
+        Args:
+            interface: Monitor-mode wireless interface
+            attack_type: 'deauth', 'fakeauth', 'interactive', 'arpreplay',
+                         'chopchop', 'fragment'
+            bssid: Target AP BSSID
+            target_mac: Client target MAC for directed attacks
+            count: Number of deauth frames (0=continuous)
+            timeout: Optional timeout override
+        """
+        attack_map = {
+            'deauth': ['-0'],
+            'fakeauth': ['-1'],
+            'interactive': ['-2'],
+            'arpreplay': ['-3'],
+            'chopchop': ['-4'],
+            'fragment': ['-5'],
+        }
+        cmd = ['aireplay-ng']
+
+        flags = attack_map.get(attack_type, ['-0'])
+        cmd.extend(flags)
+
+        if attack_type == 'deauth':
+            cmd.append(str(count))
+
+        cmd.append(self._validate_target(interface))
+
+        if bssid:
+            cmd.extend(['-a', self._validate_target(bssid)])
+        if target_mac:
+            cmd.extend(['-c', self._validate_target(target_mac)])
+
+        return self._execute_tool('aireplay-ng', cmd, timeout)
+
+    def airmon_ng_manage(
+        self,
+        interface: str,
+        action: str = 'start',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Enable/disable monitor mode with airmon-ng.
+
+        Args:
+            interface: Wireless interface (e.g., wlan0)
+            action: 'start' to enable monitor, 'stop' to disable
+            timeout: Optional timeout override
+        """
+        if action not in ('start', 'stop', 'check'):
+            raise SecurityToolError(
+                f"Invalid action: {action}. Use 'start', 'stop', or 'check'"
+            )
+
+        cmd = ['airmon-ng']
+        if action == 'check':
+            cmd.extend(['check', 'kill'])
+        else:
+            cmd.append(action)
+            cmd.append(self._validate_target(interface))
+
+        return self._execute_tool('airmon-ng', cmd, timeout)
+
+    def airodump_ng_capture(
+        self,
+        interface: str,
+        bssid: Optional[str] = None,
+        channel: Optional[int] = None,
+        output_prefix: Optional[str] = None,
+        write: bool = True,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Capture WiFi traffic with airodump-ng.
+
+        Args:
+            interface: Monitor-mode interface
+            bssid: Filter by AP BSSID
+            channel: Lock to specific channel
+            output_prefix: Output file prefix
+            write: Enable writing to pcap files
+            timeout: Optional timeout override
+        """
+        cmd = ['airodump-ng']
+
+        if write and output_prefix:
+            cmd.extend(['-w', self._validate_target(output_prefix)])
+        elif write:
+            cmd.extend(['-w', '/tmp/airodump_capture'])
+
+        if bssid:
+            cmd.extend(['--bssid', self._validate_target(bssid)])
+        if channel:
+            cmd.extend(['-c', str(channel)])
+
+        cmd.append(self._validate_target(interface))
+        return self._execute_tool('airodump-ng', cmd, timeout)
+
+    def eapmd5pass_crack(
+        self,
+        capture_file: str,
+        wordlist: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Crack EAP-MD5 hashes from capture file.
+
+        Args:
+            capture_file: Path to pcap capture file
+            wordlist: Path to wordlist (default: rockyou)
+            timeout: Optional timeout override
+        """
+        path = Path(capture_file)
+        if not path.exists():
+            raise SecurityToolError(f"Capture file not found: {capture_file}")
+
+        cmd = ['eapmd5pass']
+
+        wordlist_path = wordlist or self.WORDLISTS['rockyou']
+        if Path(wordlist_path).exists():
+            cmd.extend(['-w', wordlist_path])
+        else:
+            raise SecurityToolError(f"Wordlist not found: {wordlist_path}")
+
+        cmd.append(str(path))
+        return self._execute_tool('eapmd5pass', cmd, timeout)
+
+    # --- MITM Tools ---
+
+    def bettercap_run(
+        self,
+        interface: str,
+        target: Optional[str] = None,
+        gateway: Optional[str] = None,
+        commands: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute bettercap MITM framework.
+
+        Args:
+            interface: Network interface
+            target: Target IP address
+            gateway: Gateway IP address
+            commands: Semicolon-separated caplet commands
+            timeout: Optional timeout override
+        """
+        cmd = ['bettercap', '-iface', self._validate_target(interface)]
+
+        if target and gateway:
+            caplet = (
+                f"set arp.spoof.targets {self._validate_target(target)}; "
+                f"arp.spoof on; "
+                f"net.sniff on"
+            )
+            if commands:
+                caplet += f"; {commands}"
+            cmd.extend(['-eval', caplet])
+        elif commands:
+            cmd.extend(['-eval', commands])
+
+        return self._execute_tool('bettercap', cmd, timeout)
+
+    def driftnet_capture(
+        self,
+        interface: str,
+        output_dir: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Capture images from network traffic with driftnet.
+
+        Args:
+            interface: Network interface
+            output_dir: Directory for captured images (default: /tmp/driftnet)
+            timeout: Optional timeout override
+        """
+        cmd = ['driftnet', '-i', self._validate_target(interface)]
+
+        out = output_dir or '/tmp/driftnet'
+        cmd.extend(['-p', out])
+
+        return self._execute_tool('driftnet', cmd, timeout)
+
+    def ettercap_sniff(
+        self,
+        interface: str,
+        target: Optional[str] = None,
+        mode: str = 'bridged',
+        plugins: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute ettercap MITM attack.
+
+        Args:
+            interface: Network interface
+            target: Target specification (MAC/IP)
+            mode: 'bridged' (full duplex) or 'unified' (half duplex)
+            plugins: Comma-separated plugin list (e.g., 'dhcp_spoof,dns_spoof')
+            timeout: Optional timeout override
+        """
+        cmd = ['ettercap', '-T', '-i', self._validate_target(interface)]
+
+        if mode == 'bridged':
+            cmd.append('-B')
+        elif mode == 'unified':
+            cmd.append('-U')
+
+        if target:
+            cmd.extend(['-t', self._validate_target(target)])
+
+        if plugins:
+            for plugin in plugins.split(','):
+                cmd.extend(['-P', plugin.strip()])
+
+        cmd.append('-q')
+        return self._execute_tool('ettercap', cmd, timeout)
+
+    def mitmproxy_run(
+        self,
+        interface: Optional[str] = None,
+        port: int = 8080,
+        mode: str = 'regular',
+        script: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Start mitmproxy proxy for traffic interception.
+
+        Args:
+            interface: Listen interface
+            port: Proxy port (default: 8080)
+            mode: 'regular', 'transparent', 'socks5', or 'reverse'
+            script: Path to mitmproxy addon script
+            timeout: Optional timeout override
+        """
+        mode_map = {
+            'regular': f'--mode regular --listen-port {port}',
+            'transparent': f'--mode transparent --listen-port {port}',
+            'socks5': f'--mode socks5 --listen-port {port}',
+            'reverse': f'--mode reverse --listen-port {port}',
+        }
+
+        import shlex as _shlex
+        cmd = ['mitmproxy'] + _shlex.split(
+            mode_map.get(mode, mode_map['regular'])
+        )
+
+        if interface:
+            cmd.extend([
+                '--showhost', '--set',
+                f'listen_host={self._validate_target(interface)}'
+            ])
+
+        if script:
+            cmd.extend(['-s', script])
+
+        return self._execute_tool('mitmproxy', cmd, timeout)
+
+    # --- Forensics Tools ---
+
+    def bulk_extractor_extract(
+        self,
+        input_file: str,
+        output_dir: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Extract features from disk image with bulk_extractor.
+
+        Args:
+            input_file: Path to disk image or memory dump
+            output_dir: Output directory (default: /tmp/bulk_extractor_<ts>)
+            timeout: Optional timeout override
+        """
+        path = Path(input_file)
+        if not path.exists():
+            raise SecurityToolError(f"Input file not found: {input_file}")
+
+        out_dir = output_dir or f'/tmp/bulk_extractor_{int(time.time())}'
+        cmd = ['bulk_extractor', '-o', out_dir, str(path)]
+
+        return self._execute_tool('bulk_extractor', cmd, timeout)
+
+    def pdf_parser_analyze(
+        self,
+        input_file: str,
+        object_id: Optional[int] = None,
+        search: Optional[str] = None,
+        stats: bool = False,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Analyze PDF structure for malicious content.
+
+        Args:
+            input_file: Path to PDF file
+            object_id: Specific PDF object to analyze
+            search: Search term within PDF objects
+            stats: Show PDF statistics
+            timeout: Optional timeout override
+        """
+        path = Path(input_file)
+        if not path.exists():
+            raise SecurityToolError(f"File not found: {input_file}")
+
+        cmd = ['pdf-parser.py', str(path)]
+
+        if object_id is not None:
+            cmd.extend(['--object', str(object_id)])
+        if search:
+            cmd.extend(['--search', search])
+        if stats:
+            cmd.append('--stats')
+
+        return self._execute_tool('pdf-parser', cmd, timeout)
+
+    # --- Crypto Tools ---
+
+    def hash_identifier_identify(
+        self,
+        hash_value: str,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Identify hash type from a hash string.
+
+        Args:
+            hash_value: Hash string to identify
+            timeout: Optional timeout override
+        """
+        if any(c in hash_value for c in self.DANGEROUS_CHARS):
+            raise SecurityToolError("Invalid characters in hash value")
+
+        cmd = ['hash-identifier']
+        start = time.time()
+        try:
+            result = subprocess.run(
+                cmd,
+                input=hash_value,
+                capture_output=True,
+                text=True,
+                timeout=timeout or self.timeout
+            )
+        except subprocess.TimeoutExpired:
+            raise SecurityToolError("hash-identifier timed out")
+        except FileNotFoundError:
+            raise SecurityToolError("Tool not found: hash-identifier")
+        except Exception as e:
+            raise SecurityToolError(f"Execution failed: {e}")
+
+        duration_ms = int((time.time() - start) * 1000)
+        from datetime import datetime
+        stdout = result.stdout[:self.max_output_size]
+        stderr = result.stderr[:self.max_output_size]
+
+        return SecurityToolResult(
+            tool='hash-identifier',
+            command=f"echo '{hash_value}' | hash-identifier",
+            returncode=result.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            parsed_output={
+                'success': result.returncode == 0,
+                'exit_code': result.returncode,
+                'hash_value': hash_value,
+                'raw_preview': stdout[:2000],
+            },
+            duration_ms=duration_ms,
+            timestamp=datetime.now().isoformat()
+        )
+
+    # --- Network Tools ---
+
+    def ike_scan_enum(
+        self,
+        target: str,
+        port: int = 500,
+        aggressive: bool = False,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Scan for IKE VPN endpoints with ike-scan.
+
+        Args:
+            target: Target IP or CIDR
+            port: UDP port (default: 500)
+            aggressive: Use aggressive mode
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        cmd = ['ike-scan']
+        if aggressive:
+            cmd.append('-A')
+        cmd.extend(['-p', str(port)])
+        cmd.append(target)
+
+        return self._execute_tool('ike-scan', cmd, timeout)
+
+    def iperf3_benchmark(
+        self,
+        target: str,
+        port: int = 5201,
+        duration: int = 10,
+        protocol: str = 'tcp',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Run iperf3 network performance benchmark.
+
+        Args:
+            target: Server IP address
+            port: Server port (default: 5201)
+            duration: Test duration in seconds
+            protocol: 'tcp' or 'udp'
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        cmd = ['iperf3', '-c', target, '-p', str(port),
+               '-t', str(duration)]
+
+        if protocol == 'udp':
+            cmd.append('-u')
+            cmd.extend(['-b', '1G'])
+
+        return self._execute_tool('iperf3', cmd, timeout)
+
+    def p0f_fingerprint(
+        self,
+        interface: str,
+        count: int = 100,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Passive OS fingerprinting with p0f.
+
+        Args:
+            interface: Network interface to listen on
+            count: Number of packets to capture
+            timeout: Optional timeout override
+        """
+        cmd = ['p0f', '-i', self._validate_target(interface)]
+
+        if count > 0:
+            cmd.extend(['-c', str(count)])
+
+        return self._execute_tool('p0f', cmd, timeout)
+
+    # --- Reverse Engineering ---
+
+    def radare2_analyze(
+        self,
+        input_file: str,
+        commands: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Run radare2 reverse engineering analysis.
+
+        Args:
+            input_file: Path to binary file
+            commands: Semicolon-separated r2 commands (default: 'aaa;iS')
+            timeout: Optional timeout override
+        """
+        path = Path(input_file)
+        if not path.exists():
+            raise SecurityToolError(f"File not found: {input_file}")
+
+        r2_commands = commands or 'aaa;iS'
+        cmd = ['radare2', '-q', '-c', r2_commands, str(path)]
+
+        return self._execute_tool('radare2', cmd, timeout)
+
+    # --- Android Tools ---
+
+    def dex2jar_convert(
+        self,
+        input_file: str,
+        output_file: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Convert DEX to JAR for analysis.
+
+        Args:
+            input_file: Path to .dex or .apk file
+            output_file: Output JAR path (optional)
+            timeout: Optional timeout override
+        """
+        path = Path(input_file)
+        if not path.exists():
+            raise SecurityToolError(f"File not found: {input_file}")
+
+        cmd = ['d2j-dex2jar', str(path)]
+
+        if output_file:
+            cmd.extend(['-o', output_file])
+
+        return self._execute_tool('dex2jar', cmd, timeout)
+
+    # --- Web Tools ---
+
+    def commix_exploit(
+        self,
+        url: str,
+        level: int = 1,
+        risk: int = 1,
+        batch: bool = True,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Test for command injection with commix.
+
+        Args:
+            url: Target URL with injectable parameter
+            level: Test level (1-3)
+            risk: Risk level (1-3)
+            batch: Non-interactive mode
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(url)
+
+        cmd = ['commix', '-u', target,
+               '--level', str(min(max(level, 1), 3)),
+               '--risk', str(min(max(risk, 1), 3))]
+
+        if batch:
+            cmd.append('--batch')
+
+        return self._execute_tool('commix', cmd, timeout)
+
+    def wafw00f_detect(
+        self,
+        url: str,
+        find_all: bool = False,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Detect web application firewalls with wafw00f.
+
+        Args:
+            url: Target URL
+            find_all: Find all WAFs, not just the first
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(url)
+
+        cmd = ['wafw00f', target]
+        if find_all:
+            cmd.append('-a')
+
+        return self._execute_tool('wafw00f', cmd, timeout)
+
+    def zaproxy_scan(
+        self,
+        target: str,
+        scan_type: str = 'baseline',
+        api_key: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute OWASP ZAP scan.
+
+        Args:
+            target: Target URL
+            scan_type: 'baseline', 'full', or 'api'
+            api_key: ZAP API key (optional)
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        if scan_type == 'api':
+            cmd = ['zaproxy', '-cmd', '-quickurl', target,
+                   '-quickout', '/tmp/zap_api_results.xml']
+        elif scan_type == 'full':
+            cmd = ['zaproxy', '-cmd', '-quickurl', target,
+                   '-quickout', '/tmp/zap_full_results.xml',
+                   '-config', 'scanner.maxScanDurationInMins=60']
+        else:
+            cmd = ['zaproxy', '-cmd', '-quickurl', target,
+                   '-quickout', '/tmp/zap_baseline_results.xml']
+
+        if api_key:
+            cmd.extend(['-config', f'apikey={api_key}'])
+
+        return self._execute_tool('zaproxy', cmd, timeout)
+
+    # --- Payload Generation ---
+
+    def msfvenom_generate(
+        self,
+        payload_type: str,
+        lhost: str,
+        lport: int,
+        format: str = 'raw',
+        output_file: Optional[str] = None,
+        extra_options: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Generate Metasploit payloads with msfvenom.
+
+        Args:
+            payload_type: Payload (e.g., 'linux/x64/meterpreter/reverse_tcp')
+            lhost: Listener host IP
+            lport: Listener port
+            format: Output format ('raw', 'exe', 'elf', 'c', 'python', etc.)
+            output_file: Path to write payload
+            extra_options: Additional options string (e.g., 'Encoder=x86/shikata_ga_nai')
+            timeout: Optional timeout override
+        """
+        lhost = self._validate_target(lhost)
+        if not (1 <= lport <= 65535):
+            raise SecurityToolError("Invalid port")
+
+        cmd = ['msfvenom', '-p', payload_type,
+               f'LHOST={lhost}', f'LPORT={lport}',
+               '-f', format]
+
+        if extra_options:
+            for opt in extra_options.split():
+                cmd.append(opt)
+
+        if output_file:
+            cmd.extend(['-o', output_file])
+
+        return self._execute_tool('msfvenom', cmd, timeout)
+
+    # --- Wordlist Generation ---
+
+    def cewl_generate(
+        self,
+        url: str,
+        output_file: Optional[str] = None,
+        depth: int = 2,
+        min_length: int = 3,
+        max_length: Optional[int] = None,
+        emails_only: bool = False,
+        lowercase: bool = True,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Generate wordlist from website with cewl.
+
+        Args:
+            url: Target URL to crawl
+            output_file: Output wordlist path (default: stdout)
+            depth: Crawl depth (1-10)
+            min_length: Minimum word length
+            max_length: Maximum word length (optional)
+            emails_only: Extract emails only
+            lowercase: Convert to lowercase
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(url)
+
+        if not (1 <= depth <= 10):
+            raise SecurityToolError("Depth must be 1-10")
+        if not (1 <= min_length <= 50):
+            raise SecurityToolError("min_length must be 1-50")
+
+        cmd = ['cewl', '-d', str(depth), '-m', str(min_length)]
+
+        if max_length:
+            cmd.extend(['-M', str(max_length)])
+        if emails_only:
+            cmd.append('--email_file')
+            cmd.append(output_file or '/tmp/cewl_emails.txt')
+            return self._execute_tool('cewl', cmd, timeout)
+        if lowercase:
+            cmd.append('--lowercase')
+
+        if output_file:
+            cmd.extend(['-w', output_file])
+
+        cmd.append(target)
+        return self._execute_tool('cewl', cmd, timeout)
+
+    # --- Privilege Escalation ---
+
+    def linux_exploit_suggester_check(
+        self,
+        kernel_version: Optional[str] = None,
+        sudo_check: bool = False,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Suggest potential Linux kernel exploits.
+
+        Args:
+            kernel_version: Kernel version string (auto-detected if omitted)
+            sudo_check: Also check sudo misconfigurations
+            timeout: Optional timeout override
+        """
+        cmd = ['linux-exploit-suggester.sh']
+
+        if kernel_version:
+            cmd.extend(['--uname', kernel_version])
+        if sudo_check:
+            cmd.append('--sudostring')
+
+        return self._execute_tool('linux-exploit-suggester', cmd, timeout)
+
+    # --- Vulnerability Scanning ---
+
+    def openvas_scan(
+        self,
+        target: str,
+        scan_config: str = 'Full and fast',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute OpenVAS/GVM vulnerability scan.
+
+        Args:
+            target: Target IP or hostname
+            scan_config: Scan configuration name
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.rc', delete=False
+        ) as f:
+            f.write(f"TARGET {target}\n")
+            f.write("PORTS 1-65535\n")
+            f.write("SCAN_FAMILY OpenVAS\n")
+            f.write("EXECUTE\n")
+            rc_file = f.name
+
+        cmd = ['openvas', '--scan', rc_file]
+        return self._execute_tool('openvas', cmd, timeout)
+
+    def routersploit_exploit(
+        self,
+        target: str,
+        module: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Test router/embedded device vulnerabilities.
+
+        Args:
+            target: Target IP address
+            module: Specific exploit module path (optional)
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        if module:
+            commands = (
+                f"use {module}; set target {target}; run; exit"
+            )
+        else:
+            commands = f"scan {target}; exit"
+
+        cmd = ['rsf.py', '-c', commands]
+        return self._execute_tool('routersploit', cmd, timeout)
+
+    # --- OSINT Tools ---
+
+    def recon_ng_recon(
+        self,
+        workspace: str = 'default',
+        module: Optional[str] = None,
+        source: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute OSINT reconnaissance with recon-ng.
+
+        Args:
+            workspace: Workspace name (default: 'default')
+            module: Module to run (e.g., 'recon/domains-hosts/hackertarget')
+            source: Target source for the module
+            timeout: Optional timeout override
+        """
+        if module:
+            if source:
+                commands = (
+                    f"workspaces select {workspace}; "
+                    f"modules load {module}; "
+                    f"options set SOURCE {source}; "
+                    f"run; exit"
+                )
+            else:
+                commands = (
+                    f"workspaces select {workspace}; "
+                    f"modules load {module}; "
+                    f"run; exit"
+                )
+            cmd = ['recon-ng', '-r', commands]
+        else:
+            cmd = ['recon-ng', '-w', workspace, '--no-remote']
+
+        return self._execute_tool('recon-ng', cmd, timeout)
+
+    def spiderfoot_scan(
+        self,
+        target: str,
+        modules: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute SpiderFoot OSINT automation.
+
+        Args:
+            target: Target domain, IP, or keyword
+            modules: Comma-separated module list (optional, all if omitted)
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        cmd = ['spiderfoot', '-s', target]
+        if modules:
+            cmd.extend(['-m', modules])
+        cmd.extend(['-t', ' DOMAIN_NAME,IP_ADDRESS'])
+
+        return self._execute_tool('spiderfoot', cmd, timeout)
+
+    def theHarvester_harvest(
+        self,
+        domain: str,
+        source: str = 'google',
+        limit: int = 100,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Gather emails, IPs, and subdomains with theHarvester.
+
+        Args:
+            domain: Target domain
+            source: Data source ('google', 'bing', 'linkedin',
+                     'dnsdumpster', 'shodan', 'crtsh', 'all')
+            limit: Maximum results per source
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(domain)
+
+        cmd = ['theHarvester', '-d', target,
+               '-b', source, '-l', str(limit)]
+
+        return self._execute_tool('theHarvester', cmd, timeout)
+
+    # --- Social Engineering ---
+
+    def setoolkit_attack(
+        self,
+        attack_type: str = '1',
+        target: Optional[str] = None,
+        url: Optional[str] = None,
+        port: int = 80,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute Social-Engineering Toolkit attack vector.
+
+        Args:
+            attack_type: '1'=spear-phishing, '2'=website-attack,
+                         '3'=infectious-media, '4'=payloads
+            target: Target IP or email
+            url: Cloned/attack URL
+            port: Listener port
+            timeout: Optional timeout override
+        """
+        if attack_type == '2':
+            if not target:
+                raise SecurityToolError(
+                    "Target URL required for website attacks"
+                )
+            commands = (
+                f"website; credential-attack; "
+                f"web-clone {url or 'https://www.google.com'} {port}; "
+                f"set_config PORT {port}"
+            )
+        elif attack_type == '1':
+            commands = (
+                "SET_CONFIG SELF-signed 0; "
+                "set_config SELF_SIGNED_APPLE 0"
+            )
+        elif attack_type == '3':
+            commands = "infectious-media-generator"
+        elif attack_type == '4':
+            commands = "payloads"
+        else:
+            raise SecurityToolError(f"Invalid attack_type: {attack_type}")
+
+        cmd = ['setoolkit', '-c', commands]
+        return self._execute_tool('setoolkit', cmd, timeout)
+
+    def setoolkit_credential_harvest(
+        self,
+        url: str,
+        port: int = 80,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Clone a website for credential harvesting with SET.
+
+        Args:
+            url: URL to clone
+            port: Local server port (default: 80)
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(url)
+        if not (1 <= port <= 65535):
+            raise SecurityToolError("Invalid port")
+
+        commands = (
+            f"website; credential-attack; "
+            f"web-clone {target} {port}"
+        )
+        cmd = ['setoolkit', '-c', commands]
+        return self._execute_tool('setoolkit', cmd, timeout)
+
+    def legion_scan(
+        self,
+        target: str,
+        ports: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Execute Legion network vulnerability scanner.
+
+        Args:
+            target: Target IP or CIDR range
+            ports: Port range to scan
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        cmd = ['legion', '--nogui', '--dest', target]
+        if ports:
+            cmd.extend(['--ports', ports])
+
+        return self._execute_tool('legion', cmd, timeout)
+
+    # --- Privilege Escalation Check ---
+
+    def unix_privesc_check_full(
+        self,
+        mode: str = 'standard',
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Run unix-privesc-check for privilege escalation vectors.
+
+        Args:
+            mode: 'standard' or 'detailed'
+            timeout: Optional timeout override
+        """
+        if mode not in ('standard', 'detailed'):
+            raise SecurityToolError(
+                f"Invalid mode: {mode}. Use 'standard' or 'detailed'"
+            )
+
+        cmd = ['unix-privesc-check', mode]
+        return self._execute_tool('unix-privesc-check', cmd, timeout)
+
+    # --- Steganography ---
+
+    def openstego_embed(
+        self,
+        input_file: str,
+        embed_file: str,
+        output_file: str,
+        password: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Embed hidden data with OpenStego steganography.
+
+        Args:
+            input_file: Cover file for embedding
+            embed_file: File to embed
+            output_file: Output stego file path
+            password: Optional passphrase
+            timeout: Optional timeout override
+        """
+        path = Path(input_file)
+        if not path.exists():
+            raise SecurityToolError(f"Cover file not found: {input_file}")
+
+        embed_path = Path(embed_file)
+        if not embed_path.exists():
+            raise SecurityToolError(f"Embed file not found: {embed_file}")
+
+        cmd = ['openstego', 'embed',
+               '-cf', input_file,
+               '-mf', embed_file,
+               '-sf', output_file]
+
+        if password:
+            cmd.extend(['-p', password])
+
+        return self._execute_tool('openstego', cmd, timeout)
+
+    def openstego_extract(
+        self,
+        stego_file: str,
+        output_dir: str,
+        password: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Extract hidden data from steganographic file.
+
+        Args:
+            stego_file: Path to stego file
+            output_dir: Output directory for extracted data
+            password: Optional passphrase
+            timeout: Optional timeout override
+        """
+        path = Path(stego_file)
+        if not path.exists():
+            raise SecurityToolError(f"Stego file not found: {stego_file}")
+
+        cmd = ['openstego', 'extract',
+               '-sf', stego_file,
+               '-xd', output_dir]
+
+        if password:
+            cmd.extend(['-p', password])
+
+        return self._execute_tool('openstego', cmd, timeout)
+
+    # --- VPN Brute Force ---
+
+    def thc_pptp_bruter_brute(
+        self,
+        target: str,
+        wordlist: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> SecurityToolResult:
+        """Brute force PPTP VPN credentials.
+
+        Args:
+            target: Target IP address
+            wordlist: Path to wordlist (default: rockyou)
+            timeout: Optional timeout override
+        """
+        target = self._validate_target(target)
+
+        cmd = ['thc-pptp-bruter', target]
+
+        wordlist_path = wordlist or self.WORDLISTS['rockyou']
+        if Path(wordlist_path).exists():
+            cmd.extend(['-w', wordlist_path])
+        else:
+            raise SecurityToolError(f"Wordlist not found: {wordlist_path}")
+
+        return self._execute_tool('thc-pptp-bruter', cmd, timeout)
+
 
 def main():
+
     """CLI entry point for testing."""
     import argparse
     import sys

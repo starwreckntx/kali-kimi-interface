@@ -303,6 +303,271 @@ class SecurityToolExecutor:
             timeout=input_data.get('timeout'),
         )
 
+        # === PHASE 1 PROOF-OF-LIFE REGISTRATIONS ===
+        
+        # Information Gathering
+        self.tools['dnsrecon_scan'] = ToolSpec(
+            name='dnsrecon_scan',
+            description='DNS enumeration and reconnaissance',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'domain': {'type': 'string', 'description': 'Target domain'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['domain'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_dnsrecon_scan
+        )
+        
+        # Vulnerability Analysis
+        self.tools['unix_privesc_check'] = ToolSpec(
+            name='unix_privesc_check',
+            description='Check for Unix privilege escalation vectors',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'mode': {'type': 'string', 'enum': ['standard', 'detailed'], 'default': 'standard'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': [],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_unix_privesc_check
+        )
+        
+        # Web Applications
+        self.tools['wpscan_scan'] = ToolSpec(
+            name='wpscan_scan',
+            description='WordPress vulnerability scanner',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Target WordPress URL'},
+                    'enumerate': {'type': 'string', 'description': 'Enumeration type'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['url'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_wpscan_scan
+        )
+        
+        # Password Attacks
+        self.tools['cewl_wordlist'] = ToolSpec(
+            name='cewl_wordlist',
+            description='Generate custom wordlist from URL',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Target URL to spider'},
+                    'depth': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'default': 2},
+                    'min_length': {'type': 'integer', 'minimum': 1, 'maximum': 50, 'default': 3},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['url'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_cewl_wordlist
+        )
+        
+        # Wireless Attacks
+        self.tools['airmon_check'] = ToolSpec(
+            name='airmon_check',
+            description='Check wireless interfaces',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': [],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_airmon_check
+        )
+        
+        # Sniffing & Spoofing
+        self.tools['tcpdump_list_interfaces'] = ToolSpec(
+            name='tcpdump_list_interfaces',
+            description='List network capture interfaces',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': [],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_READ_ONLY,
+            handler=self._handle_tcpdump_list_interfaces
+        )
+        
+        # Forensics
+        self.tools['binwalk_scan'] = ToolSpec(
+            name='binwalk_scan',
+            description='Scan file for embedded signatures',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'file_path': {'type': 'string', 'description': 'Path to file'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['file_path'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_READ_ONLY,
+            handler=self._handle_binwalk_scan
+        )
+        
+        # Reverse Engineering
+        self.tools['ltrace_trace'] = ToolSpec(
+            name='ltrace_trace',
+            description='Trace library calls in binary',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'binary': {'type': 'string', 'description': 'Binary to trace'},
+                    'args': {'type': 'string', 'description': 'Arguments to pass'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['binary'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_WORKSPACE_WRITE,
+            handler=self._handle_ltrace_trace
+        )
+        
+        # Exploitation
+        self.tools['searchsploit_query'] = ToolSpec(
+            name='searchsploit_query',
+            description='Search exploit database',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'term': {'type': 'string', 'description': 'Search term'},
+                    'case_sensitive': {'type': 'boolean', 'default': False},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['term'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_READ_ONLY,
+            handler=self._handle_searchsploit_query
+        )
+        
+        # Social Engineering
+        self.tools['weeman_phish'] = ToolSpec(
+            name='weeman_phish',
+            description='Phishing server setup',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Target URL to clone'},
+                    'port': {'type': 'integer', 'minimum': 1, 'maximum': 65535, 'default': 8080},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['url'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_weeman_phish
+        )
+        
+        # Mobile Analysis
+        self.tools['apktool_decompile'] = ToolSpec(
+            name='apktool_decompile',
+            description='Decompile Android APK',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'apk_path': {'type': 'string', 'description': 'Path to APK'},
+                    'output_dir': {'type': 'string', 'description': 'Output directory'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['apk_path'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_WORKSPACE_WRITE,
+            handler=self._handle_apktool_decompile
+        )
+        
+        # Steganography
+        self.tools['steghide_info'] = ToolSpec(
+            name='steghide_info',
+            description='Extract steganography info',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'file_path': {'type': 'string', 'description': 'Path to file'},
+                    'passphrase': {'type': 'string', 'description': 'Optional passphrase'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['file_path'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_READ_ONLY,
+            handler=self._handle_steghide_info
+        )
+        
+        # Reporting
+        self.tools['recordmydesktop_capture'] = ToolSpec(
+            name='recordmydesktop_capture',
+            description='Record desktop session',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'output_file': {'type': 'string', 'description': 'Output file path'},
+                    'duration': {'type': 'integer', 'minimum': 1, 'maximum': 300, 'default': 10},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['output_file'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_WORKSPACE_WRITE,
+            handler=self._handle_recordmydesktop_capture
+        )
+        
+        # System Services
+        self.tools['netcat_port_scan'] = ToolSpec(
+            name='netcat_port_scan',
+            description='Port scan with netcat',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'Target host'},
+                    'port': {'type': 'integer', 'minimum': 1, 'maximum': 65535},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['target', 'port'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_DANGER_FULL_ACCESS,
+            handler=self._handle_netcat_port_scan
+        )
+        
+        self.tools['radare2_scan'] = ToolSpec(
+            name='radare2_scan',
+            description='Analyze binary sections with radare2 batch mode',
+            input_schema={
+                'type': 'object',
+                'properties': {
+                    'file_path': {'type': 'string', 'description': 'Binary file to analyze'},
+                    'command': {'type': 'string', 'default': 'iS'},
+                    'timeout': {'type': 'integer', 'minimum': 1, 'maximum': 3600}
+                },
+                'required': ['file_path'],
+                'additionalProperties': False
+            },
+            required_permission=self.PERMISSION_READ_ONLY,
+            handler=self._handle_radare2_scan
+        )
+
     def _handle_nmap_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
         """Handle nmap scan execution."""
         return self.adapter.nmap_scan(
@@ -349,6 +614,53 @@ class SecurityToolExecutor:
             target=input_data['target'],
             ports=input_data.get('ports', 'top100')
         )
+    
+    # === PHASE 1 HANDLERS ===
+    
+    def _handle_dnsrecon_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.dnsrecon_scan(domain=input_data['domain'], timeout=input_data.get('timeout'))
+    
+    def _handle_unix_privesc_check(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.unix_privesc_check(mode=input_data.get('mode', 'standard'), timeout=input_data.get('timeout'))
+    
+    def _handle_wpscan_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.wpscan_scan(url=input_data['url'], enumerate=input_data.get('enumerate'), timeout=input_data.get('timeout'))
+    
+    def _handle_cewl_wordlist(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.cewl_wordlist(url=input_data['url'], depth=input_data.get('depth', 2), min_length=input_data.get('min_length', 3), timeout=input_data.get('timeout'))
+    
+    def _handle_airmon_check(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.airmon_check(timeout=input_data.get('timeout'))
+    
+    def _handle_tcpdump_list_interfaces(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.tcpdump_list_interfaces(timeout=input_data.get('timeout'))
+    
+    def _handle_binwalk_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.binwalk_scan(file_path=input_data['file_path'], timeout=input_data.get('timeout'))
+    
+    def _handle_ltrace_trace(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.ltrace_trace(binary=input_data['binary'], args=input_data.get('args'), timeout=input_data.get('timeout'))
+    
+    def _handle_searchsploit_query(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.searchsploit_query(term=input_data['term'], case_sensitive=input_data.get('case_sensitive', False), timeout=input_data.get('timeout'))
+    
+    def _handle_weeman_phish(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.weeman_phish(url=input_data['url'], port=input_data.get('port', 8080), timeout=input_data.get('timeout'))
+    
+    def _handle_apktool_decompile(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.apktool_decompile(apk_path=input_data['apk_path'], output_dir=input_data.get('output_dir'), timeout=input_data.get('timeout'))
+    
+    def _handle_steghide_info(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.steghide_info(file_path=input_data['file_path'], passphrase=input_data.get('passphrase'), timeout=input_data.get('timeout'))
+    
+    def _handle_recordmydesktop_capture(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.recordmydesktop_capture(output_file=input_data['output_file'], duration=input_data.get('duration', 10), timeout=input_data.get('timeout'))
+    
+    def _handle_netcat_port_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.netcat_port_scan(target=input_data['target'], port=input_data['port'], timeout=input_data.get('timeout'))
+    
+    def _handle_radare2_scan(self, input_data: Dict[str, Any]) -> SecurityToolResult:
+        return self.adapter.radare2_scan(file_path=input_data['file_path'], command=input_data.get('command', 'iS'), timeout=input_data.get('timeout'))
     
     def list_tools(self) -> Dict[str, Dict[str, Any]]:
         """
