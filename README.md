@@ -216,81 +216,31 @@ clear error explaining how to point it at one.
 
 Kali Kimi Interface is designed for AI agents and automation:
 
-### Hermes Harness Adapter
+### Hermes Integration
 
-Direct execution path for Hermes without Kimi in the loop.
-Hermes plans and reconciles; this module executes and writes session artifacts.
+See **[docs/HERMES_INTEGRATION.md](docs/HERMES_INTEGRATION.md)** for the full Hermes guide.
+
+Summary:
+- **HermesHarness** — direct single-tool execution without Kimi
+- **HermesDispatcher** — multi-phase plan runner with `--json` and Telegram confirmation
+- **kali-harness** / **kali-harness-actions** skills for Hermes
+- Governance ON blocks `danger-full-access` tools by default; operator confirmation required
 
 ```python
 from src.hermes_harness import HermesHarness
-
-harness = HermesHarness()
-
-# List tools / registry state
-print(len(harness.list_tools()))
-print(harness.integrity_report())
-
-# Execute one tool call
-result = harness.execute('nmap_scan', {
-    'target': '192.168.1.1',
-    'scan_type': 'syn',
-    'ports': '1-1000'
-})
-
-# Result already contains RECONCILE-friendly fields
+result = HermesHarness().execute('searchsploit_query', {'term': 'apache', 'timeout': 30})
 print(result.to_json())
 ```
 
 Session artifacts are written to `results/<session_id>.json` with SHA-256 hashes.
 
-### Structured Output
+### AI Orchestrator (Kimi)
 
-All tool executions return JSON:
+The legacy Kimi orchestrator remains available:
 
-```json
-{
-  "tool": "nmap",
-  "command": "nmap -sS -p 1-1000 192.168.1.1",
-  "returncode": 0,
-  "parsed_output": {
-    "hosts": [
-      {
-        "ip": "192.168.1.1",
-        "mac": "f4:52:46:7a:e1:8b",
-        "ports": [
-          {"port": "22", "state": "open", "service": "ssh"},
-          {"port": "80", "state": "open", "service": "http"}
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Safety Features
-
-- **Input validation** - Prevents command injection
-- **Rate limiting** - Prevents abuse
-- **Timeout controls** - Long-running operations
-- **Sandboxed execution** - Controlled environment
-
-### Example: AI Agent Usage
-
-```python
-from src.kali_tools import KaliToolAdapter
-
-adapter = KaliToolAdapter()
-
-# Safe, validated scan
-result = adapter.nmap_scan(
-    target="192.168.1.1",
-    scan_type="syn",
-    ports="1-1000"
-)
-
-# Structured data for AI analysis
-print(result.parsed_output)
-```
+Session results are written to `<work-dir>/results/<session-id>.json` (the work dir
+defaults to the repo root). If no Kimi binary is found, the orchestrator exits with a
+clear error explaining how to point it at one.
 
 ## 🧪 Testing
 
