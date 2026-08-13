@@ -51,6 +51,8 @@ network_map_*.json
 !integrity_harness/data/*.json
 integrity_harness/reports/*_result.json
 integrity_harness/reports/*.jsonl
+# Claude Code web session config is source-of-record, not scan output
+!.claude/settings.json
 /tmp/
 *.pcap
 *.cap
