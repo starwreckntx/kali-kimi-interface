@@ -73,3 +73,8 @@ airodump-ng*
 *.pfx
 shadow
 passwd
+
+# OsintRag vendors its .NET 8 TensorPrimitives dependency here; the generic
+# Python `lib/` rule above must not exclude it.
+!OsintRag/lib/
+!OsintRag/lib/*.dll
